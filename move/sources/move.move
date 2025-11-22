@@ -11,6 +11,7 @@ module eventum::eventum {
     use sui::kiosk::{Self, Kiosk, KioskOwnerCap};
     use sui::transfer_policy::{Self, TransferPolicy, TransferPolicyCap}; // Policy gardé pour init mais pas utilisé dans claim
     use sui::table::{Self, Table};
+    use eventum::custom_royalty_rule;
     
 
 
@@ -28,6 +29,7 @@ module eventum::eventum {
     const ENotCheckedIn: u64 = 10;
     const EAlreadyCertified: u64 = 11;
     const ESoldOut: u64 = 12;
+    const EInvalidPercentage: u64 = 13;
 
     public struct EVENTUM has drop {}
 
@@ -360,14 +362,19 @@ module eventum::eventum {
         cap: &OrganizerCap,
         event: &Event,
         policy: &mut TransferPolicy<Ticket>,
-        _policy_cap: &TransferPolicyCap<Ticket>,
+        policy_cap: &TransferPolicyCap<Ticket>,
         _ctx: &mut TxContext
     ) {
         assert!(object::id(event) == cap.event_id, ENotOrganizer);
+        assert!(event.royalty_percentage <= 100, EInvalidPercentage);
         if (event.price > 0 && event.royalty_percentage > 0) {
-           // Placeholder configuration
+           custom_royalty_rule::add(
+            policy,
+            policy_cap,
+            (event.royalty_percentage as u16) * 100,
+            0
+        );
         };
-        let _ = policy;
     }
 
     public entry fun withdraw_funds(
@@ -382,5 +389,55 @@ module eventum::eventum {
             let profit = coin::split(&mut event.balance, amount, ctx);
             transfer::public_transfer(profit, tx_context::sender(ctx));
         };
+    }
+}
+
+module eventum::custom_royalty_rule {
+    use sui::transfer_policy::{Self, TransferPolicy, TransferPolicyCap};
+    use sui::coin::{Self, Coin};
+    use sui::sui::SUI;
+    
+    /// La structure "témoin" qui identifie cette règle unique
+    public struct Rule has drop {}
+
+    /// Configuration de la règle : Pourcentage (bps) et Montant Min
+    public struct Config has store, drop {
+        amount_bp: u16,
+        min_amount: u64,
+    }
+
+    /// 1. Fonction pour AJOUTER la règle (celle que tu cherchais)
+    public fun add<T>(
+        policy: &mut TransferPolicy<T>,
+        cap: &TransferPolicyCap<T>,
+        amount_bp: u16,
+        min_amount: u64
+    ) {
+        transfer_policy::add_rule(
+            Rule {}, 
+            policy, 
+            cap, 
+            Config { amount_bp, min_amount }
+        );
+    }
+
+    /// 2. Fonction pour PAYER la règle (sera utilisée par l'acheteur plus tard)
+    public fun pay<T>(
+        policy: &mut TransferPolicy<T>,
+        request: &mut sui::transfer_policy::TransferRequest<T>,
+        payment: Coin<SUI>,
+        _ctx: &mut TxContext
+    ) {
+        let paid = coin::value(&payment);
+        let config: &Config = transfer_policy::get_rule(Rule {}, policy);
+        
+        // Calcul du montant dû (logique simplifiée ici)
+        let expected = (((transfer_policy::paid(request) as u128) * (config.amount_bp as u128) / 10_000) as u64);
+        
+        assert!(paid >= expected, 0);
+        assert!(paid >= config.min_amount, 1);
+
+        transfer_policy::add_to_balance(Rule {}, policy, payment);
+        transfer_policy::add_receipt(Rule {}, request);
     }
 }
