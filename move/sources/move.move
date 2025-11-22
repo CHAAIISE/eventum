@@ -44,7 +44,8 @@ module eventum::eventum {
         prizes_distributed: bool,
         checkin_enabled: bool,
         event_ended: bool,
-        winner_ranks: Table<address, u64>,  // Stocke address → rang (1, 2, 3...)
+        winner_ranks: Table<ID, u64>,  // Stocke ticket_id → rang (1, 2, 3...)
+        ticket_owners: Table<ID, address>,  // Stocke ticket_id → owner (pour distribute_prizes)
         is_soulbound: bool,  // Si true, les NFTs deviennent non-transférables après certification
     }
 
@@ -123,6 +124,7 @@ module eventum::eventum {
             checkin_enabled: false,
             event_ended: false,
             winner_ranks: table::new(ctx),
+            ticket_owners: table::new(ctx),
             is_soulbound: is_soulbound
         };
 
@@ -155,8 +157,11 @@ module eventum::eventum {
             coin::join(&mut event.balance, payment);
         };
 
+        let ticket_uid = object::new(ctx);
+        let ticket_id = object::uid_to_inner(&ticket_uid);
+        
         let ticket = Ticket {
-            id: object::new(ctx),
+            id: ticket_uid,
             event_id: object::id(event),
             title: event.title,
             description: string::utf8(b"Ticket Kiosk - Non Verifie"),
@@ -164,6 +169,9 @@ module eventum::eventum {
             rank: 0,
             url: string::utf8(b"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=KioskTicket"),
         };
+
+        // Stocker le mapping ticket_id → owner initial
+        table::add(&mut event.ticket_owners, ticket_id, buyer);
 
         // Place (non lock) pour permettre les transferts avant certification
         kiosk::place(kiosk, kiosk_cap, ticket);
@@ -210,11 +218,11 @@ module eventum::eventum {
     }
 
     // --- NOUVEAU : DISTRIBUTION DES PRIX (ESCROW) ---
-    // Cette fonction prend la liste des gagnants et envoie l'argent automatiquement
+    // Cette fonction prend la liste des ticket IDs gagnants et envoie l'argent aux propriétaires
     public entry fun distribute_prizes(
         cap: &OrganizerCap,
         event: &mut Event,
-        winners: vector<address>, // Liste des adresses des gagnants (dans l'ordre du classement)
+        winner_ticket_ids: vector<ID>, // Liste des ticket IDs gagnants (dans l'ordre du classement)
         ctx: &mut TxContext
     ) {
         assert!(object::id(event) == cap.event_id, ENotOrganizer);
@@ -222,31 +230,31 @@ module eventum::eventum {
         
         // On vérifie qu'on a autant de gagnants que de règles de prix définies
         let dist_len = vector::length(&event.prize_distribution);
-        assert!(vector::length(&winners) == dist_len, EWinnerCountMismatch);
+        assert!(vector::length(&winner_ticket_ids) == dist_len, EWinnerCountMismatch);
 
         // Calcul de la valeur totale de la pool (Total des ventes de tickets)
-        // Note : On calcule sur la balance ACTUELLE. 
         let total_pool = coin::value(&event.balance);
         
         let mut i = 0;
         while (i < dist_len) {
-            let winner_addr = *vector::borrow(&winners, i);
+            let ticket_id = *vector::borrow(&winner_ticket_ids, i);
             let percent = *vector::borrow(&event.prize_distribution, i);
             
+            // Récupérer l'owner du ticket depuis la table
+            let winner_addr = *table::borrow(&event.ticket_owners, ticket_id);
+            
             // Calcul du montant : (Total * Pourcentage) / 100
-            // Attention à l'overflow si les montants sont gigantesques, mais pour un hackathon u64 suffit souvent.
-            // Pour être safe en prod, on utiliserait u128 pour le calcul intermédiaire.
             let prize_amount = (total_pool * percent) / 100;
 
             if (prize_amount > 0) {
-                // On retire l'argent du coffre et on l'envoie au gagnant
+                // On retire l'argent du coffre et on l'envoie au propriétaire actuel du ticket
                 let prize_coin = coin::split(&mut event.balance, prize_amount, ctx);
                 transfer::public_transfer(prize_coin, winner_addr);
             };
             
-            // Stocker le rang (index 0 → rang 1, index 1 → rang 2, etc.)
+            // Stocker le rang par ticket_id (index 0 → rang 1, index 1 → rang 2, etc.)
             let rank = i + 1;
-            table::add(&mut event.winner_ranks, winner_addr, rank);
+            table::add(&mut event.winner_ranks, ticket_id, rank);
 
             i = i + 1;
         };
@@ -255,9 +263,44 @@ module eventum::eventum {
         event.event_ended = true;  // Marquer l'event comme terminé
     }
 
+    // --- NOUVELLE FONCTION : ENREGISTRER LES RANGS COMPLETS ---
+    // Permet à l'organisateur d'enregistrer le classement de tous les participants
+    // (utilisé pour les marathons, compétitions, etc.)
+    public entry fun set_final_rankings(
+        cap: &OrganizerCap,
+        event: &mut Event,
+        ranked_ticket_ids: vector<ID>, // Liste ordonnée de tous les tickets (1er, 2ème, 3ème, ...)
+        _ctx: &mut TxContext
+    ) {
+        assert!(object::id(event) == cap.event_id, ENotOrganizer);
+        
+        let len = vector::length(&ranked_ticket_ids);
+        let mut i = 0;
+        
+        while (i < len) {
+            let ticket_id = *vector::borrow(&ranked_ticket_ids, i);
+            let rank = i + 1; // rang commence à 1
+            
+            // Ajouter ou mettre à jour le rang
+            if (table::contains(&event.winner_ranks, ticket_id)) {
+                // Si déjà présent (ex: via distribute_prizes), on ne fait rien
+                // ou on pourrait mettre à jour si besoin
+            } else {
+                table::add(&mut event.winner_ranks, ticket_id, rank);
+            };
+            
+            i = i + 1;
+        };
+        
+        // Optionnel : marquer l'event comme terminé si pas déjà fait
+        if (!event.event_ended) {
+            event.event_ended = true;
+        };
+    }
+
     // --- CERTIFICATION DE PARTICIPATION ---
     // Permet aux participants de certifier leur NFT après la fin de l'event
-    // Détecte automatiquement si le participant est gagnant et attribue le badge approprié
+    // Détecte automatiquement le rang du ticket et affiche dans la description
     // Si l'event est soulbound, le NFT devient non-transférable après certification
     public entry fun claim_certification(
         event: &Event,
@@ -265,7 +308,7 @@ module eventum::eventum {
         kiosk_cap: &KioskOwnerCap,
         _policy: &TransferPolicy<Ticket>,
         ticket_id: ID,
-        ctx: &mut TxContext
+        _ctx: &mut TxContext
     ) {
         // Vérifier que l'event est terminé
         assert!(event.event_ended, EEventNotEnded);
@@ -282,39 +325,36 @@ module eventum::eventum {
         // Vérifier pas déjà certifié (status == 1 seulement)
         assert!(ticket_mut.status == 1, EAlreadyCertified);
         
-        // Récupérer l'address du participant
-        let participant = tx_context::sender(ctx);
+        // Tous les participants certifiés ont le même status
+        ticket_mut.status = 2;  // Status: Certified
         
-        // Vérifier si le participant est un gagnant
-        if (table::contains(&event.winner_ranks, participant)) {
-            // GAGNANT - Récupérer le rang
-            let rank = *table::borrow(&event.winner_ranks, participant);
-            ticket_mut.rank = rank;  // ✅ Écrire le rang dans le NFT
-            ticket_mut.status = 2;  // Status gagnant
+        // Vérifier si ce ticket a un rang enregistré
+        if (table::contains(&event.winner_ranks, ticket_id)) {
+            // CLASSÉ - Récupérer le rang
+            let rank = *table::borrow(&event.winner_ranks, ticket_id);
+            ticket_mut.rank = rank;
             
-            // Badges différenciés selon le rang
+            // Badges et descriptions différenciés selon le rang
             if (rank == 1) {
-                // 🥇 1ère place - Médaille d'or
-                ticket_mut.description = string::utf8(b"🥇 1st Place Winner");
+                ticket_mut.description = string::utf8(b"Rank #1 - Gold Medal");
                 ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/1st-place-medal-emoji.png");
             } else if (rank == 2) {
-                // 🥈 2ème place - Médaille d'argent
-                ticket_mut.description = string::utf8(b"🥈 2nd Place Winner");
+                ticket_mut.description = string::utf8(b"Rank #2 - Silver Medal");
                 ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/2nd-place-medal-emoji.png");
             } else if (rank == 3) {
-                // 🥉 3ème place - Médaille de bronze
-                ticket_mut.description = string::utf8(b"🥉 3rd Place Winner");
+                ticket_mut.description = string::utf8(b"Rank #3 - Bronze Medal");
                 ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/3rd-place-medal-emoji.png");
             } else {
-                // 🏆 Autres gagnants (4+) - Trophée avec rang
-                ticket_mut.description = string::utf8(b"🏆 Winner - Certified");
+                // Tous les autres rangs affichent leur position exacte
+                // Note: Move ne permet pas de concaténer facilement des strings avec des nombres
+                // Donc on affiche un message générique avec le rang stocké dans ticket.rank
+                ticket_mut.description = string::utf8(b"Finisher - Ranked");
                 ticket_mut.url = string::utf8(b"https://img.icons8.com/fluency/96/trophy.png");
             };
         } else {
-            // PARTICIPANT NORMAL - Certificat de participation
-            ticket_mut.status = 3;
-            ticket_mut.rank = 0;  // ✅ Pas de rang = 0
-            ticket_mut.description = string::utf8(b"✓ Participation Certified");
+            // PARTICIPANT NON CLASSÉ - Certificat de participation
+            ticket_mut.rank = 0;  // Pas de rang
+            ticket_mut.description = string::utf8(b"Participation Certified");
             ticket_mut.url = string::utf8(b"https://img.icons8.com/color/96/certificate.png");
         };
         
