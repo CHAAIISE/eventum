@@ -1,7 +1,9 @@
+"use client"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
-import { Ticket, Wallet, Menu, Compass, Calendar, Settings } from "lucide-react"
+import { Ticket, Menu, Compass, Calendar, Settings } from "lucide-react"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
+import { ConnectButton } from "@mysten/dapp-kit"
 
 export function Navbar() {
   return (
@@ -43,10 +45,9 @@ export function Navbar() {
 
         {/* Actions */}
         <div className="flex items-center gap-4">
-          <Button className="hidden md:flex bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white border-0 shadow-lg shadow-cyan-900/20 rounded-full font-medium">
-            <Wallet className="mr-2 h-4 w-4" />
-            Connect Wallet
-          </Button>
+          <div className="hidden md:block">
+            <ConnectButton />
+          </div>
 
           {/* Mobile Menu */}
           <Sheet>
@@ -69,10 +70,7 @@ export function Navbar() {
                   <Settings className="h-5 w-5 text-cyan-400" />
                   Manage
                 </Link>
-                <Button className="w-full mt-4 bg-gradient-to-r from-cyan-600 to-blue-600 text-white border-0">
-                  <Wallet className="mr-2 h-4 w-4" />
-                  Connect Wallet
-                </Button>
+                <ConnectButton />
               </div>
             </SheetContent>
           </Sheet>
