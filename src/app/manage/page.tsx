@@ -28,6 +28,7 @@ import {
   X,
 } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Spinner } from "@/components/ui/spinner"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 
 interface Event {
@@ -46,6 +47,11 @@ export default function ManagePage() {
   const [eventType, setEventType] = useState<"standard" | "competition">("standard")
   const [isPaid, setIsPaid] = useState(false)
   const [hasPrizePool, setHasPrizePool] = useState(false)
+  const [createTitle, setCreateTitle] = useState("")
+  const [createCoverUrl, setCreateCoverUrl] = useState("")
+  const [generating, setGenerating] = useState(false)
+  const [generatedImages, setGeneratedImages] = useState<Record<string, string> | null>(null)
+  const [generateError, setGenerateError] = useState<string | null>(null)
 
   // Dashboard state
   const [events, setEvents] = useState<Event[]>(INITIAL_EVENTS)
@@ -112,6 +118,8 @@ export default function ManagePage() {
                     </Label>
                     <Input
                       id="title"
+                      value={createTitle}
+                      onChange={(e) => setCreateTitle(e.target.value)}
                       placeholder="e.g. Sui Builder House 2025"
                       className="bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12 text-lg"
                     />
@@ -299,6 +307,8 @@ export default function ManagePage() {
                       <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                       <Input
                         placeholder="Or paste image URL..."
+                        value={createCoverUrl}
+                        onChange={(e) => setCreateCoverUrl(e.target.value)}
                         className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20"
                       />
                     </div>
@@ -309,6 +319,66 @@ export default function ManagePage() {
                   <Rocket className="mr-2 h-5 w-5 group-hover:animate-pulse" />
                   Launch Event On-Chain
                 </Button>
+                <div className="mt-4">
+                  <Button
+                    onClick={async () => {
+                      // generate assets for the event title
+                      setGenerateError(null)
+                      setGeneratedImages(null)
+                      if (!createTitle) {
+                        setGenerateError("Please enter an event title first")
+                        return
+                      }
+                      if (!createCoverUrl) {
+                        setGenerateError("Please provide a cover image URL first")
+                        return
+                      }
+                      try {
+                        setGenerating(true)
+                        const payload = { eventTitle: createTitle.trim(), coverImageUrl: createCoverUrl.trim() }
+                        const res = await fetch("/api/generate-assets", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify(payload),
+                        })
+                        const data = await res.json()
+                        if (!res.ok) {
+                          setGenerateError(data?.error || "Generation failed")
+                        } else {
+                          setGeneratedImages(data.images || null)
+                        }
+                      } catch (err: any) {
+                        setGenerateError(err?.message || String(err))
+                      } finally {
+                        setGenerating(false)
+                      }
+                    }}
+                    className="w-full h-12 bg-emerald-600 text-white rounded-md"
+                    disabled={generating}
+                  >
+                    {generating ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <Spinner className="h-4 w-4 text-white" />
+                        <span>Generating NFTs...</span>
+                      </div>
+                    ) : (
+                      "Generate NFT's"
+                    )}
+                  </Button>
+
+                  {generateError && <p className="text-sm text-red-400 mt-2">{generateError}</p>}
+
+                  {generatedImages && (
+                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-4">
+                      {Object.entries(generatedImages).map(([key, url]) => (
+                        <div key={key} className="flex flex-col items-center">
+                          <img src={url} alt={key} className="h-28 w-28 object-cover rounded-md border" />
+                          <span className="text-xs text-muted-foreground mt-2">{key}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </form>
             </GlassCard>
           </div>
