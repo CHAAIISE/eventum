@@ -31,6 +31,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Spinner } from "@/components/ui/spinner"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 
+// --- SUI IMPORTS ---
+import { useSignAndExecuteTransaction, useCurrentAccount } from "@mysten/dapp-kit"
+import { Transaction } from "@mysten/sui/transactions"
+import { useToast } from "@/hooks/use-toast" // Assure-toi d'avoir ce hook ou remplace par un console.log
+import { PACKAGE_ID, MODULE_NAME } from "@/lib/contracts"
+
 interface Event {
   id: number
   title: string
@@ -42,13 +48,32 @@ interface Event {
 
 export default function ManagePage() {
   const [view, setView] = useState<"create" | "dashboard">("dashboard")
+  const { mutate: signAndExecute } = useSignAndExecuteTransaction()
+  const currentAccount = useCurrentAccount()
+  const { toast } = useToast()
 
-  // Create form state
+  // --- FORM STATES ---
+  // states pour tous les champs du formulaire pour pouvoir les envoyer à la blockchain
   const [eventType, setEventType] = useState<"standard" | "competition">("standard")
   const [isPaid, setIsPaid] = useState(false)
   const [hasPrizePool, setHasPrizePool] = useState(false)
+  
   const [createTitle, setCreateTitle] = useState("")
+  const [createDescription, setCreateDescription] = useState("")
+  const [createDate, setCreateDate] = useState("")
+  const [createTime, setCreateTime] = useState("")
+  const [createSupply, setCreateSupply] = useState("")
+  const [createPrice, setCreatePrice] = useState("")
+  const [createRoyalty, setCreateRoyalty] = useState("")
+  
+  // Prize Pool Distribution (1st, 2nd, 3rd)
+  const [dist1, setDist1] = useState("")
+  const [dist2, setDist2] = useState("")
+  const [dist3, setDist3] = useState("")
+
   const [createCoverUrl, setCreateCoverUrl] = useState("")
+  
+  // AI Generation States
   const [generating, setGenerating] = useState(false)
   const [generatedImages, setGeneratedImages] = useState<Record<string, string> | null>(null)
   const [generateError, setGenerateError] = useState<string | null>(null)
@@ -59,6 +84,76 @@ export default function ManagePage() {
   const [activeTab, setActiveTab] = useState<"Active" | "Upcoming" | "Finished">("Active")
   const [showQRModal, setShowQRModal] = useState(false)
   const [qrPayload, setQrPayload] = useState<string | null>(null)
+
+  // --- SUI TRANSACITON HANDLER ---
+  const handleCreateEventOnChain = async (e: React.MouseEvent) => {
+    e.preventDefault()
+
+    if (!currentAccount) {
+      toast({ title: "Wallet not connected", description: "Please connect your wallet first.", variant: "destructive" })
+      return
+    }
+
+    if (!createTitle || !createDate || !createSupply) {
+        toast({ title: "Missing fields", description: "Please fill in all required fields.", variant: "destructive" })
+        return
+    }
+
+    try {
+      const tx = new Transaction()
+
+      // 1. Préparation des arguments
+      // Prix : Convertir SUI en MIST (x 1 milliard)
+      const priceInMist = isPaid && createPrice ? parseFloat(createPrice) * 1_000_000_000 : 0
+      
+      // Distribution des prix : Créer le vecteur
+      const distribution = []
+      if (hasPrizePool) {
+        if (dist1) distribution.push(Number(dist1))
+        if (dist2) distribution.push(Number(dist2))
+        if (dist3) distribution.push(Number(dist3))
+      }
+
+      // 2. Construction de la transaction Move
+      tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::create_event`,
+        arguments: [
+          tx.pure.string(createTitle), // Title
+          tx.pure.string(createDescription || "No description"), // Description
+          tx.pure.string(`${createDate} ${createTime}`), // Date string combinée
+          tx.pure.u64(priceInMist), // Price
+          tx.pure.u64(Number(createSupply)), // Max Supply
+          tx.pure.u16(isPaid && createRoyalty ? Number(createRoyalty) : 0), // Royalty %
+          tx.pure.vector('u64', distribution), // Prize dist vector
+          tx.pure.bool(false), // is_soulbound (Hardcodé false pour l'instant ou ajoute un switch)
+          tx.pure.bool(eventType === "competition"), // is_competition
+        ],
+      })
+
+      // 3. Exécution
+      signAndExecute(
+        { transaction: tx },
+        {
+          onSuccess: (result) => {
+            console.log("Transaction Success:", result)
+            toast({ 
+                title: "Event Created!", 
+                description: `Transaction Digest: ${result.digest.slice(0, 10)}...` 
+            })
+            // Optionnel : Reset form ou redirect vers Dashboard
+            setView("dashboard")
+          },
+          onError: (error) => {
+            console.error("Transaction Error:", error)
+            toast({ title: "Error", description: error.message, variant: "destructive" })
+          },
+        },
+      )
+    } catch (err) {
+      console.error(err)
+      toast({ title: "Error building transaction", variant: "destructive" })
+    }
+  }
 
   const handleEventClick = (id: number) => {
     setSelectedEventId(id === selectedEventId ? null : id)
@@ -131,6 +226,8 @@ export default function ManagePage() {
                     </Label>
                     <Textarea
                       id="description"
+                      value={createDescription}
+                      onChange={(e) => setCreateDescription(e.target.value)}
                       placeholder="Tell us about your event..."
                       className="bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 min-h-[150px] resize-none text-base"
                     />
@@ -146,6 +243,8 @@ export default function ManagePage() {
                         <Input
                           id="date"
                           type="date"
+                          value={createDate}
+                          onChange={(e) => setCreateDate(e.target.value)}
                           className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
                         />
                       </div>
@@ -159,6 +258,8 @@ export default function ManagePage() {
                         <Input
                           id="time"
                           type="time"
+                          value={createTime}
+                          onChange={(e) => setCreateTime(e.target.value)}
                           className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
                         />
                       </div>
@@ -200,6 +301,8 @@ export default function ManagePage() {
                             id="supply"
                             type="number"
                             placeholder="1000"
+                            value={createSupply}
+                            onChange={(e) => setCreateSupply(e.target.value)}
                             className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
                           />
                         </div>
@@ -217,6 +320,8 @@ export default function ManagePage() {
                                 id="price"
                                 type="number"
                                 placeholder="10"
+                                value={createPrice}
+                                onChange={(e) => setCreatePrice(e.target.value)}
                                 className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
                               />
                             </div>
@@ -233,6 +338,8 @@ export default function ManagePage() {
                                 type="number"
                                 placeholder="5"
                                 max="100"
+                                value={createRoyalty}
+                                onChange={(e) => setCreateRoyalty(e.target.value)}
                                 className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
                               />
                             </div>
@@ -258,10 +365,11 @@ export default function ManagePage() {
                       <div className="space-y-6 p-6 rounded-lg bg-cyan-500/5 border border-cyan-500/20 animate-in fade-in slide-in-from-top-2">
                         <div className="space-y-2">
                           <Label htmlFor="poolAmount" className="text-white">
-                            Total Prize Pool to Lock (SUI)
+                            Total Prize Pool Estimation (SUI)
                           </Label>
                           <div className="relative">
                             <Trophy className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-amber-400" />
+                            {/* Ce champ est purement indicatif dans ce contrat car le pool est rempli par les ventes */}
                             <Input
                               id="poolAmount"
                               type="number"
@@ -269,6 +377,7 @@ export default function ManagePage() {
                               className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
                             />
                           </div>
+                          <p className="text-xs text-muted-foreground">Note: Prize pool is funded by ticket sales in this version.</p>
                         </div>
 
                         <div className="space-y-2">
@@ -276,15 +385,30 @@ export default function ManagePage() {
                           <div className="grid grid-cols-3 gap-4">
                             <div className="space-y-1">
                               <span className="text-xs text-muted-foreground">1st Place</span>
-                              <Input placeholder="50" className="bg-white/5 border-white/10 text-white text-center" />
+                              <Input 
+                                placeholder="50" 
+                                value={dist1}
+                                onChange={(e) => setDist1(e.target.value)}
+                                className="bg-white/5 border-white/10 text-white text-center" 
+                              />
                             </div>
                             <div className="space-y-1">
                               <span className="text-xs text-muted-foreground">2nd Place</span>
-                              <Input placeholder="30" className="bg-white/5 border-white/10 text-white text-center" />
+                              <Input 
+                                placeholder="30" 
+                                value={dist2}
+                                onChange={(e) => setDist2(e.target.value)}
+                                className="bg-white/5 border-white/10 text-white text-center" 
+                              />
                             </div>
                             <div className="space-y-1">
                               <span className="text-xs text-muted-foreground">3rd Place</span>
-                              <Input placeholder="20" className="bg-white/5 border-white/10 text-white text-center" />
+                              <Input 
+                                placeholder="20" 
+                                value={dist3}
+                                onChange={(e) => setDist3(e.target.value)}
+                                className="bg-white/5 border-white/10 text-white text-center" 
+                              />
                             </div>
                           </div>
                         </div>
@@ -315,12 +439,16 @@ export default function ManagePage() {
                   </div>
                 </div>
 
-                <Button className="w-full h-14 text-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white border-0 shadow-lg shadow-cyan-900/20 font-bold tracking-wide mt-8 group">
+                <Button 
+                    onClick={handleCreateEventOnChain}
+                    className="w-full h-14 text-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white border-0 shadow-lg shadow-cyan-900/20 font-bold tracking-wide mt-8 group"
+                >
                   <Rocket className="mr-2 h-5 w-5 group-hover:animate-pulse" />
                   Launch Event On-Chain
                 </Button>
                 <div className="mt-4">
                   <Button
+                    type="button" // Important pour pas trigger le submit si c'était dans un form
                     onClick={async () => {
                       // generate assets for the event title
                       setGenerateError(null)
