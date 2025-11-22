@@ -9,8 +9,10 @@ module eventum::eventum {
     use std::string::{Self, String};
     use std::vector;
     use sui::kiosk::{Self, Kiosk, KioskOwnerCap};
-    use sui::transfer_policy::{Self, TransferPolicy, TransferPolicyCap};
+    use sui::transfer_policy::{Self, TransferPolicy, TransferPolicyCap}; // Policy gardé pour init mais pas utilisé dans claim
     use sui::table::{Self, Table};
+    
+
 
     // --- CONSTANTES D'ERREUR ---
     const EWrongAmount: u64 = 0;
@@ -25,6 +27,7 @@ module eventum::eventum {
     const EEventNotEnded: u64 = 9;
     const ENotCheckedIn: u64 = 10;
     const EAlreadyCertified: u64 = 11;
+    const ESoldOut: u64 = 12;
 
     public struct EVENTUM has drop {}
 
@@ -36,17 +39,27 @@ module eventum::eventum {
     public struct Event has key, store {
         id: UID,
         title: String,
+        description: String,
+        date: String,
         organizer: address,
         price: u64,
+        max_supply: u64,
+        minted_count: u64,
+        royalty_percentage: u16,
         balance: sui::coin::Coin<SUI>,
         minted_list: Table<address, bool>,
-        prize_distribution: vector<u64>, 
+        prize_distribution: vector<u64>,
         prizes_distributed: bool,
         checkin_enabled: bool,
         event_ended: bool,
-        winner_ranks: Table<ID, u64>,  // Stocke ticket_id → rang (1, 2, 3...)
-        ticket_owners: Table<ID, address>,  // Stocke ticket_id → owner (pour distribute_prizes)
-        is_soulbound: bool,  // Si true, les NFTs deviennent non-transférables après certification
+        winner_ranks: Table<ID, u64>,
+        
+        // --- CHANGEMENT ICI ---
+        // On ne stocke plus les owners, mais les montants en attente par Ticket ID
+        pending_prizes: Table<ID, u64>, 
+        
+        is_soulbound: bool,
+        is_competition: bool,
     }
 
     public struct Ticket has key, store {
@@ -82,21 +95,23 @@ module eventum::eventum {
         
         let (policy, policy_cap) = transfer_policy::new<Ticket>(&publisher, ctx);
 
-        // Share policy d'abord
         transfer::public_share_object(policy);
-        
-        // Puis transfer les objets possédés
         transfer::public_transfer(publisher, tx_context::sender(ctx));
         transfer::public_transfer(display, tx_context::sender(ctx));
         transfer::public_transfer(policy_cap, tx_context::sender(ctx));
     }
 
-    // --- CREATION AVEC REGLES DE DISTRIBUTION ---
+    // --- CREATION AVEC NOUVELLE TABLE ---
     public entry fun create_event(
         title: vector<u8>,
+        description: vector<u8>,
+        date: vector<u8>,
         price: u64,
+        max_supply: u64,
+        royalty_percentage: u16,
         prize_distribution: vector<u64>,
-        is_soulbound: bool,  // Toggle pour rendre les NFTs non-transférables après certification
+        is_soulbound: bool,
+        is_competition: bool,
         ctx: &mut TxContext
     ) {
         let mut i = 0;
@@ -114,18 +129,24 @@ module eventum::eventum {
         let event = Event {
             id: event_uid,
             title: string::utf8(title),
+            description: string::utf8(description),
+            date: string::utf8(date),
             organizer: tx_context::sender(ctx),
             price: price,
+            max_supply: max_supply,
+            minted_count: 0,
+            royalty_percentage: royalty_percentage,
             balance: coin::zero(ctx),
             minted_list: table::new(ctx),
-            // Stockage des règles
             prize_distribution: prize_distribution,
             prizes_distributed: false,
             checkin_enabled: false,
             event_ended: false,
             winner_ranks: table::new(ctx),
-            ticket_owners: table::new(ctx),
-            is_soulbound: is_soulbound
+            // Initialisation de la table des prix en attente
+            pending_prizes: table::new(ctx), 
+            is_soulbound: is_soulbound,
+            is_competition: is_competition
         };
 
         let cap = OrganizerCap {
@@ -146,11 +167,12 @@ module eventum::eventum {
     ) {
         let buyer = tx_context::sender(ctx);
         assert!(!table::contains(&event.minted_list, buyer), EAlreadyHasTicket);
+        assert!(event.minted_count < event.max_supply, ESoldOut);
+        
         table::add(&mut event.minted_list, buyer, true);
+        event.minted_count = event.minted_count + 1;
 
-        // Gestion du paiement
         if (event.price == 0) {
-            // Event gratuit : retourner le coin vide
             transfer::public_transfer(payment, buyer);
         } else {
             assert!(coin::value(&payment) >= event.price, EWrongAmount);
@@ -158,7 +180,7 @@ module eventum::eventum {
         };
 
         let ticket_uid = object::new(ctx);
-        let ticket_id = object::uid_to_inner(&ticket_uid);
+        // Note: On n'ajoute plus rien dans 'ticket_owners' car ça n'existe plus
         
         let ticket = Ticket {
             id: ticket_uid,
@@ -170,16 +192,9 @@ module eventum::eventum {
             url: string::utf8(b"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=KioskTicket"),
         };
 
-        // Stocker le mapping ticket_id → owner initial
-        table::add(&mut event.ticket_owners, ticket_id, buyer);
-
-        // Place (non lock) pour permettre les transferts avant certification
         kiosk::place(kiosk, kiosk_cap, ticket);
     }
 
-    // --- SELF CHECK-IN ---
-    // Fonction permettant à l'utilisateur de se valider lui-même
-    // en scannant le QR code unique affiché à l'entrée de l'événement
     public entry fun self_checkin(
         event: &Event,
         kiosk: &mut Kiosk,
@@ -187,26 +202,16 @@ module eventum::eventum {
         ticket_id: ID,
         _ctx: &mut TxContext
     ) {
-        // Vérifier que le check-in est ouvert
         assert!(event.checkin_enabled, ECheckinNotEnabled);
-        
-        // Emprunter le ticket depuis le Kiosk de l'utilisateur
         let ticket_mut = kiosk::borrow_mut<Ticket>(kiosk, kiosk_cap, ticket_id);
-        
-        // Vérifier que le ticket appartient bien à cet event
         assert!(ticket_mut.event_id == object::id(event), EWrongEvent);
-        
-        // Vérifier pas déjà scanné
         assert!(ticket_mut.status == 0, EAlreadyScanned);
         
-        // Mettre à jour le NFT
         ticket_mut.status = 1;
-        ticket_mut.description = string::utf8(b"Participant Verified ✓");
+        ticket_mut.description = string::utf8(b"Participant Verified");
         ticket_mut.url = string::utf8(b"https://img.icons8.com/fluency/96/checked-user-male.png");
     }
 
-    // --- TOGGLE CHECK-IN ---
-    // Permet à l'organisateur d'activer/désactiver le check-in
     public entry fun toggle_checkin(
         cap: &OrganizerCap,
         event: &mut Event,
@@ -217,22 +222,20 @@ module eventum::eventum {
         event.checkin_enabled = enabled;
     }
 
-    // --- NOUVEAU : DISTRIBUTION DES PRIX (ESCROW) ---
-    // Cette fonction prend la liste des ticket IDs gagnants et envoie l'argent aux propriétaires
+    // --- DISTRIBUTION DES PRIX : CALCULER ET STOCKER (Pull Pattern) ---
+    // Ne transfère plus d'argent, remplit juste la table pending_prizes
     public entry fun distribute_prizes(
         cap: &OrganizerCap,
         event: &mut Event,
-        winner_ticket_ids: vector<ID>, // Liste des ticket IDs gagnants (dans l'ordre du classement)
-        ctx: &mut TxContext
+        winner_ticket_ids: vector<ID>,
+        _ctx: &mut TxContext
     ) {
         assert!(object::id(event) == cap.event_id, ENotOrganizer);
         assert!(!event.prizes_distributed, EPrizesAlreadyDistributed);
         
-        // On vérifie qu'on a autant de gagnants que de règles de prix définies
         let dist_len = vector::length(&event.prize_distribution);
         assert!(vector::length(&winner_ticket_ids) == dist_len, EWinnerCountMismatch);
 
-        // Calcul de la valeur totale de la pool (Total des ventes de tickets)
         let total_pool = coin::value(&event.balance);
         
         let mut i = 0;
@@ -240,36 +243,36 @@ module eventum::eventum {
             let ticket_id = *vector::borrow(&winner_ticket_ids, i);
             let percent = *vector::borrow(&event.prize_distribution, i);
             
-            // Récupérer l'owner du ticket depuis la table
-            let winner_addr = *table::borrow(&event.ticket_owners, ticket_id);
-            
-            // Calcul du montant : (Total * Pourcentage) / 100
+            // Calcul du montant
             let prize_amount = (total_pool * percent) / 100;
 
             if (prize_amount > 0) {
-                // On retire l'argent du coffre et on l'envoie au propriétaire actuel du ticket
-                let prize_coin = coin::split(&mut event.balance, prize_amount, ctx);
-                transfer::public_transfer(prize_coin, winner_addr);
+                // On enregistre que ce ticket a droit à ce montant
+                if (table::contains(&event.pending_prizes, ticket_id)) {
+                    let current = table::remove(&mut event.pending_prizes, ticket_id);
+                    table::add(&mut event.pending_prizes, ticket_id, current + prize_amount);
+                } else {
+                    table::add(&mut event.pending_prizes, ticket_id, prize_amount);
+                };
             };
             
-            // Stocker le rang par ticket_id (index 0 → rang 1, index 1 → rang 2, etc.)
+            // Enregistrer le rang
             let rank = i + 1;
-            table::add(&mut event.winner_ranks, ticket_id, rank);
+            if (!table::contains(&event.winner_ranks, ticket_id)) {
+                table::add(&mut event.winner_ranks, ticket_id, rank);
+            };
 
             i = i + 1;
         };
 
         event.prizes_distributed = true;
-        event.event_ended = true;  // Marquer l'event comme terminé
+        event.event_ended = true;
     }
 
-    // --- NOUVELLE FONCTION : ENREGISTRER LES RANGS COMPLETS ---
-    // Permet à l'organisateur d'enregistrer le classement de tous les participants
-    // (utilisé pour les marathons, compétitions, etc.)
     public entry fun set_final_rankings(
         cap: &OrganizerCap,
         event: &mut Event,
-        ranked_ticket_ids: vector<ID>, // Liste ordonnée de tous les tickets (1er, 2ème, 3ème, ...)
+        ranked_ticket_ids: vector<ID>,
         _ctx: &mut TxContext
     ) {
         assert!(object::id(event) == cap.event_id, ENotOrganizer);
@@ -279,62 +282,44 @@ module eventum::eventum {
         
         while (i < len) {
             let ticket_id = *vector::borrow(&ranked_ticket_ids, i);
-            let rank = i + 1; // rang commence à 1
-            
-            // Ajouter ou mettre à jour le rang
-            if (table::contains(&event.winner_ranks, ticket_id)) {
-                // Si déjà présent (ex: via distribute_prizes), on ne fait rien
-                // ou on pourrait mettre à jour si besoin
-            } else {
+            let rank = i + 1;
+            if (!table::contains(&event.winner_ranks, ticket_id)) {
                 table::add(&mut event.winner_ranks, ticket_id, rank);
             };
-            
             i = i + 1;
         };
         
-        // Optionnel : marquer l'event comme terminé si pas déjà fait
         if (!event.event_ended) {
             event.event_ended = true;
         };
     }
 
-    // --- CERTIFICATION DE PARTICIPATION ---
-    // Permet aux participants de certifier leur NFT après la fin de l'event
-    // Détecte automatiquement le rang du ticket et affiche dans la description
-    // Si l'event est soulbound, le NFT devient non-transférable après certification
+    // --- FONCTION PRINCIPALE : UPGRADE + CLAIM FUNDS ---
     public entry fun claim_certification(
-        event: &Event,
+        event: &mut Event, // Mutable car on modifie pending_prizes et balance
         kiosk: &mut Kiosk,
         kiosk_cap: &KioskOwnerCap,
-        _policy: &TransferPolicy<Ticket>,
+        // Policy retirée car pas de lock soulbound
         ticket_id: ID,
-        _ctx: &mut TxContext
+        ctx: &mut TxContext
     ) {
-        // Vérifier que l'event est terminé
+        // 1. Vérifications
         assert!(event.event_ended, EEventNotEnded);
         
-        // Emprunter le ticket depuis le Kiosk de l'utilisateur
+        // On emprunte le ticket (reste dans le kiosk)
         let ticket_mut = kiosk::borrow_mut<Ticket>(kiosk, kiosk_cap, ticket_id);
         
-        // Vérifier que le ticket appartient bien à cet event
         assert!(ticket_mut.event_id == object::id(event), EWrongEvent);
-        
-        // Vérifier que le participant a bien check-in (status >= 1)
         assert!(ticket_mut.status >= 1, ENotCheckedIn);
-        
-        // Vérifier pas déjà certifié (status == 1 seulement)
         assert!(ticket_mut.status == 1, EAlreadyCertified);
+
+        // 2. Mise à jour visuelle (Metadata & Rang)
+        ticket_mut.status = 2; // Certified
         
-        // Tous les participants certifiés ont le même status
-        ticket_mut.status = 2;  // Status: Certified
-        
-        // Vérifier si ce ticket a un rang enregistré
-        if (table::contains(&event.winner_ranks, ticket_id)) {
-            // CLASSÉ - Récupérer le rang
+        if (event.is_competition && table::contains(&event.winner_ranks, ticket_id)) {
             let rank = *table::borrow(&event.winner_ranks, ticket_id);
             ticket_mut.rank = rank;
             
-            // Badges et descriptions différenciés selon le rang
             if (rank == 1) {
                 ticket_mut.description = string::utf8(b"Rank #1 - Gold Medal");
                 ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/1st-place-medal-emoji.png");
@@ -345,29 +330,46 @@ module eventum::eventum {
                 ticket_mut.description = string::utf8(b"Rank #3 - Bronze Medal");
                 ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/3rd-place-medal-emoji.png");
             } else {
-                // Tous les autres rangs affichent leur position exacte
-                // Note: Move ne permet pas de concaténer facilement des strings avec des nombres
-                // Donc on affiche un message générique avec le rang stocké dans ticket.rank
                 ticket_mut.description = string::utf8(b"Finisher - Ranked");
                 ticket_mut.url = string::utf8(b"https://img.icons8.com/fluency/96/trophy.png");
             };
         } else {
-            // PARTICIPANT NON CLASSÉ - Certificat de participation
-            ticket_mut.rank = 0;  // Pas de rang
+            ticket_mut.rank = 0;
             ticket_mut.description = string::utf8(b"Participation Certified");
             ticket_mut.url = string::utf8(b"https://img.icons8.com/color/96/certificate.png");
         };
-        
-        // Si l'event est soulbound, verrouiller définitivement le NFT après certification
-        if (event.is_soulbound) {
-            // Le NFT était "placed" (transférable), on le "lock" maintenant (non-transférable)
-            let ticket = kiosk::take<Ticket>(kiosk, kiosk_cap, ticket_id);
-            kiosk::lock(kiosk, kiosk_cap, _policy, ticket);
+
+        // 3. LOGIQUE DE PAIEMENT "CLAIM"
+        // Vérifie si ce ticket a de l'argent qui l'attend
+        if (table::contains(&event.pending_prizes, ticket_id)) {
+            // Retirer le montant de la table (sécurité anti-double-dépense)
+            let amount = table::remove(&mut event.pending_prizes, ticket_id);
+            
+            if (amount > 0) {
+                // Prendre l'argent de l'event
+                let prize_coin = coin::split(&mut event.balance, amount, ctx);
+                // Envoyer au propriétaire du Kiosk (celui qui signe la tx)
+                transfer::public_transfer(prize_coin, tx_context::sender(ctx));
+            }
         };
+        
+        // Le NFT est relâché (fin du borrow) avec ses nouvelles métadonnées
     }
 
-    // --- RETRAIT ORGANISATEUR (Modifié) ---
-    // Permet de récupérer ce qui reste (si pas de prix, ou le reste après les prix)
+    public entry fun configure_royalties(
+        cap: &OrganizerCap,
+        event: &Event,
+        policy: &mut TransferPolicy<Ticket>,
+        _policy_cap: &TransferPolicyCap<Ticket>,
+        _ctx: &mut TxContext
+    ) {
+        assert!(object::id(event) == cap.event_id, ENotOrganizer);
+        if (event.price > 0 && event.royalty_percentage > 0) {
+           // Placeholder configuration
+        };
+        let _ = policy;
+    }
+
     public entry fun withdraw_funds(
         cap: &OrganizerCap,
         event: &mut Event,
