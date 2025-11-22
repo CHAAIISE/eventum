@@ -44,6 +44,8 @@ module eventum::eventum {
         prizes_distributed: bool,
         checkin_enabled: bool,
         event_ended: bool,
+        winner_ranks: Table<address, u64>,  // Stocke address → rang (1, 2, 3...)
+        is_soulbound: bool,  // Si true, les NFTs deviennent non-transférables après certification
     }
 
     public struct Ticket has key, store {
@@ -92,10 +94,10 @@ module eventum::eventum {
     public entry fun create_event(
         title: vector<u8>,
         price: u64,
-        prize_distribution: vector<u64>, 
+        prize_distribution: vector<u64>,
+        is_soulbound: bool,  // Toggle pour rendre les NFTs non-transférables après certification
         ctx: &mut TxContext
     ) {
-        // Validation : La somme des % ne doit pas dépasser 100
         let mut i = 0;
         let len = vector::length(&prize_distribution);
         let mut total_percent = 0;
@@ -119,7 +121,9 @@ module eventum::eventum {
             prize_distribution: prize_distribution,
             prizes_distributed: false,
             checkin_enabled: false,
-            event_ended: false
+            event_ended: false,
+            winner_ranks: table::new(ctx),
+            is_soulbound: is_soulbound
         };
 
         let cap = OrganizerCap {
@@ -131,12 +135,10 @@ module eventum::eventum {
         transfer::public_transfer(cap, tx_context::sender(ctx));
     }
 
-    // --- ACHAT (Inchangé, l'argent s'accumule dans event.balance) ---
     public entry fun buy_ticket_into_kiosk(
         event: &mut Event,
         kiosk: &mut Kiosk,
         kiosk_cap: &KioskOwnerCap,
-        policy: &TransferPolicy<Ticket>,
         payment: Coin<SUI>,
         ctx: &mut TxContext
     ) {
@@ -160,10 +162,11 @@ module eventum::eventum {
             description: string::utf8(b"Ticket Kiosk - Non Verifie"),
             status: 0,
             rank: 0,
-            url: string::utf8(b"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=KioskTicket"), 
+            url: string::utf8(b"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=KioskTicket"),
         };
 
-        kiosk::lock(kiosk, kiosk_cap, policy, ticket);
+        // Place (non lock) pour permettre les transferts avant certification
+        kiosk::place(kiosk, kiosk_cap, ticket);
     }
 
     // --- SELF CHECK-IN ---
@@ -240,6 +243,10 @@ module eventum::eventum {
                 let prize_coin = coin::split(&mut event.balance, prize_amount, ctx);
                 transfer::public_transfer(prize_coin, winner_addr);
             };
+            
+            // Stocker le rang (index 0 → rang 1, index 1 → rang 2, etc.)
+            let rank = i + 1;
+            table::add(&mut event.winner_ranks, winner_addr, rank);
 
             i = i + 1;
         };
@@ -250,13 +257,15 @@ module eventum::eventum {
 
     // --- CERTIFICATION DE PARTICIPATION ---
     // Permet aux participants de certifier leur NFT après la fin de l'event
-    // Chaque participant peut appeler cette fonction pour obtenir son certificat
+    // Détecte automatiquement si le participant est gagnant et attribue le badge approprié
+    // Si l'event est soulbound, le NFT devient non-transférable après certification
     public entry fun claim_certification(
         event: &Event,
         kiosk: &mut Kiosk,
         kiosk_cap: &KioskOwnerCap,
+        _policy: &TransferPolicy<Ticket>,
         ticket_id: ID,
-        _ctx: &mut TxContext
+        ctx: &mut TxContext
     ) {
         // Vérifier que l'event est terminé
         assert!(event.event_ended, EEventNotEnded);
@@ -270,65 +279,50 @@ module eventum::eventum {
         // Vérifier que le participant a bien check-in (status >= 1)
         assert!(ticket_mut.status >= 1, ENotCheckedIn);
         
-        // Vérifier pas déjà certifié (status != 3)
-        assert!(ticket_mut.status != 3, EAlreadyCertified);
+        // Vérifier pas déjà certifié (status == 1 seulement)
+        assert!(ticket_mut.status == 1, EAlreadyCertified);
         
-        // Si le participant a un rank (gagnant), on garde son status à 2
-        // Sinon, on passe à status 3 (participant certifié)
-        if (ticket_mut.rank == 0) {
-            // Participant normal (non gagnant)
+        // Récupérer l'address du participant
+        let participant = tx_context::sender(ctx);
+        
+        // Vérifier si le participant est un gagnant
+        if (table::contains(&event.winner_ranks, participant)) {
+            // GAGNANT - Récupérer le rang
+            let rank = *table::borrow(&event.winner_ranks, participant);
+            ticket_mut.rank = rank;  // ✅ Écrire le rang dans le NFT
+            ticket_mut.status = 2;  // Status gagnant
+            
+            // Badges différenciés selon le rang
+            if (rank == 1) {
+                // 🥇 1ère place - Médaille d'or
+                ticket_mut.description = string::utf8(b"🥇 1st Place Winner");
+                ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/1st-place-medal-emoji.png");
+            } else if (rank == 2) {
+                // 🥈 2ème place - Médaille d'argent
+                ticket_mut.description = string::utf8(b"🥈 2nd Place Winner");
+                ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/2nd-place-medal-emoji.png");
+            } else if (rank == 3) {
+                // 🥉 3ème place - Médaille de bronze
+                ticket_mut.description = string::utf8(b"🥉 3rd Place Winner");
+                ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/3rd-place-medal-emoji.png");
+            } else {
+                // 🏆 Autres gagnants (4+) - Trophée avec rang
+                ticket_mut.description = string::utf8(b"🏆 Winner - Certified");
+                ticket_mut.url = string::utf8(b"https://img.icons8.com/fluency/96/trophy.png");
+            };
+        } else {
+            // PARTICIPANT NORMAL - Certificat de participation
             ticket_mut.status = 3;
+            ticket_mut.rank = 0;  // ✅ Pas de rang = 0
             ticket_mut.description = string::utf8(b"✓ Participation Certified");
             ticket_mut.url = string::utf8(b"https://img.icons8.com/color/96/certificate.png");
-        } else {
-            // Gagnant - on garde le status mais on met à jour la description
-            ticket_mut.status = 2;
-            ticket_mut.description = string::utf8(b"🏆 Winner - Certified");
-            // L'URL reste celle du badge de gagnant
         };
-    }
-
-    // --- DÉFINIR LE RANG D'UN GAGNANT ---
-    // L'organisateur peut définir le rang (1, 2, 3...) d'un ticket gagnant
-    // Le participant doit signer la transaction pour ouvrir son Kiosk
-    public entry fun set_winner_rank(
-        cap: &OrganizerCap,
-        event: &Event,
-        kiosk: &mut Kiosk,
-        kiosk_cap: &KioskOwnerCap,
-        ticket_id: ID,
-        rank: u64,
-        _ctx: &mut TxContext
-    ) {
-        // Vérifier que c'est le bon organisateur
-        assert!(object::id(event) == cap.event_id, ENotOrganizer);
         
-        // Vérifier que l'event est terminé
-        assert!(event.event_ended, EEventNotEnded);
-        
-        // Emprunter le ticket depuis le Kiosk
-        let ticket_mut = kiosk::borrow_mut<Ticket>(kiosk, kiosk_cap, ticket_id);
-        
-        // Vérifier que le ticket appartient bien à cet event
-        assert!(ticket_mut.event_id == object::id(event), EWrongEvent);
-        
-        // Définir le rang et changer le status
-        ticket_mut.rank = rank;
-        ticket_mut.status = 2;  // Status gagnant
-        
-        // URL selon le rang
-        if (rank == 1) {
-            ticket_mut.description = string::utf8(b"🥇 1st Place Winner");
-            ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/1st-place-medal-emoji.png");
-        } else if (rank == 2) {
-            ticket_mut.description = string::utf8(b"🥈 2nd Place Winner");
-            ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/2nd-place-medal-emoji.png");
-        } else if (rank == 3) {
-            ticket_mut.description = string::utf8(b"🥉 3rd Place Winner");
-            ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/3rd-place-medal-emoji.png");
-        } else {
-            ticket_mut.description = string::utf8(b"🏆 Winner - Certified");
-            ticket_mut.url = string::utf8(b"https://img.icons8.com/fluency/96/trophy.png");
+        // Si l'event est soulbound, verrouiller définitivement le NFT après certification
+        if (event.is_soulbound) {
+            // Le NFT était "placed" (transférable), on le "lock" maintenant (non-transférable)
+            let ticket = kiosk::take<Ticket>(kiosk, kiosk_cap, ticket_id);
+            kiosk::lock(kiosk, kiosk_cap, _policy, ticket);
         };
     }
 
