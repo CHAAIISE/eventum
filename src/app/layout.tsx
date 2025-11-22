@@ -3,7 +3,9 @@ import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
 import { Navbar } from "@/components/navbar"
+import { EnokiProvider } from "@/app/enoki/EnokiProvider"
 import "./globals.css"
+import "@mysten/dapp-kit/dist/index.css"
 
 const geistSans = Geist({
   variable: "--font-sans",
@@ -30,9 +32,11 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased min-h-screen bg-background selection:bg-cyan-500/30`}
       >
-        <Navbar />
-        <main className="pt-16 min-h-screen">{children}</main>
-        <Analytics />
+        <EnokiProvider>
+          <Navbar />
+          <main className="pt-16 min-h-screen">{children}</main>
+          <Analytics />
+        </EnokiProvider>
       </body>
     </html>
   )
