@@ -1,5 +1,6 @@
 "use client"
 
+import dynamic from "next/dynamic"
 import { useState } from "react"
 import { GlassCard } from "@/components/ui/glass-card"
 import { Badge } from "@/components/ui/badge"
@@ -12,6 +13,13 @@ type TabType = "active" | "past"
 export default function MyEventsPage() {
   const [activeTab, setActiveTab] = useState<TabType>("active")
   const [showQRScanner, setShowQRScanner] = useState(false)
+  const [scanResult, setScanResult] = useState<string | null>(null)
+  const [paused, setPaused] = useState(false)
+
+  const Scanner = dynamic(
+    () => import("@yudiel/react-qr-scanner").then((mod) => mod.Scanner),
+    { ssr: false }
+  )
 
   return (
     <div className="min-h-screen pt-32 pb-20 px-4">
@@ -177,16 +185,63 @@ export default function MyEventsPage() {
             <DialogHeader>
               <DialogTitle className="text-white text-xl">Scan Check-in QR Code</DialogTitle>
             </DialogHeader>
-            <div className="relative aspect-square bg-black rounded-lg overflow-hidden border-2 border-cyan-500/30">
-              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-cyan-950/50 to-blue-950/50">
-                <div className="text-center space-y-4">
-                  <Camera className="h-16 w-16 text-cyan-400 mx-auto animate-pulse" />
-                  <p className="text-muted-foreground">Camera viewfinder would appear here</p>
-                  <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30">Simulated Camera</Badge>
+
+            <div className="relative aspect-square bg-black rounded-lg overflow-hidden border-2 border-white/10">
+              {!scanResult ? (
+                <div className="absolute inset-0">
+                  <Scanner
+                    onScan={(detected) => {
+                      if (!detected || detected.length === 0) return
+                      const first = detected[0]
+                      const value = (first as any).rawValue ?? null
+                      if (value) {
+                        setScanResult(String(value))
+                        setPaused(true)
+                      }
+                    }}
+                    onError={(err) => console.error("QR scanner error:", err)}
+                    constraints={{ facingMode: "environment", aspectRatio: 1 }}
+                    components={{ finder: true, torch: true }}
+                    scanDelay={500}
+                    paused={paused}
+                  />
                 </div>
-              </div>
+              ) : (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 className="h-12 w-12 text-green-400" />
+                    <div>
+                      <h3 className="text-lg font-bold text-white">Check-in Successful</h3>
+                      <p className="text-sm text-muted-foreground">Scanned: <span className="font-mono">{scanResult}</span></p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => {
+                        // simulate marking check-in then close
+                        setShowQRScanner(false)
+                        setTimeout(() => setScanResult(null), 300)
+                      }}
+                      className="bg-green-600 text-white"
+                    >
+                      Done
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        // resume scanning
+                        setScanResult(null)
+                        setPaused(false)
+                      }}
+                    >
+                      Scan Again
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
-            <p className="text-sm text-muted-foreground text-center">
+
+            <p className="text-sm text-muted-foreground text-center mt-4">
               Position the organizer's entrance QR code within the frame to check in.
             </p>
           </DialogContent>

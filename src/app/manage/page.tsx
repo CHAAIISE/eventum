@@ -28,7 +28,7 @@ import {
   X,
 } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Dialog, DialogContent } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 
 interface Event {
   id: number
@@ -52,6 +52,7 @@ export default function ManagePage() {
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<"Active" | "Upcoming" | "Finished">("Active")
   const [showQRModal, setShowQRModal] = useState(false)
+  const [qrPayload, setQrPayload] = useState<string | null>(null)
 
   const handleEventClick = (id: number) => {
     setSelectedEventId(id === selectedEventId ? null : id)
@@ -404,6 +405,8 @@ export default function ManagePage() {
                             className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white border-0 h-9 shadow-lg shadow-green-900/20"
                             onClick={(e) => {
                               e.stopPropagation()
+                              // use a constant payload placeholder; replace with real unique payload later
+                              setQrPayload(`EVENT-${event.id}:STATIC_TOKEN`)
                               setShowQRModal(true)
                             }}
                           >
@@ -530,32 +533,67 @@ export default function ManagePage() {
           </>
         )}
 
-        <Dialog open={showQRModal} onOpenChange={setShowQRModal}>
+        <Dialog
+          open={showQRModal}
+          onOpenChange={(open) => {
+            setShowQRModal(open)
+            if (!open) setQrPayload(null)
+          }}
+        >
           <DialogContent className="max-w-2xl bg-[#03132b] border-white/10 p-12">
             <button
-              onClick={() => setShowQRModal(false)}
+              onClick={() => {
+                setShowQRModal(false)
+                setQrPayload(null)
+              }}
               className="absolute top-4 right-4 text-muted-foreground hover:text-white transition-colors"
             >
               <X className="h-6 w-6" />
             </button>
             <div className="text-center space-y-6">
-              <div>
-                <h2 className="text-3xl font-bold text-white mb-2">Entrance QR Code</h2>
-                <p className="text-muted-foreground">Attendees scan this code at the entrance to check in</p>
-              </div>
+              <DialogHeader>
+                <DialogTitle className="text-3xl font-bold text-white mb-2">Entrance QR Code</DialogTitle>
+                <DialogDescription className="text-muted-foreground">Attendees scan this code at the entrance to check in</DialogDescription>
+              </DialogHeader>
 
               {/* Large QR Code Display */}
               <div className="mx-auto w-96 h-96 bg-white rounded-2xl p-8 flex items-center justify-center shadow-2xl">
-                <div className="w-full h-full bg-black rounded-lg flex items-center justify-center">
-                  <QrCode className="h-48 w-48 text-white" />
+                <div className="w-full h-full bg-black rounded-lg flex flex-col items-center justify-center p-4">
+                  {qrPayload ? (
+                    <>
+                      <img
+                        src={`https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=${encodeURIComponent(
+                          qrPayload
+                        )}`}
+                        alt="Event QR Code"
+                        className="h-64 w-64 bg-white/5 rounded-md"
+                      />
+                      <div className="mt-4 flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(qrPayload)
+                            } catch (e) {
+                              console.error("copy failed", e)
+                            }
+                          }}
+                        >
+                          Copy Payload
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-sm text-muted-foreground">No QR payload yet. Open an event QR to generate one.</div>
+                  )}
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-sm px-4 py-2">
-                  Event ID: #EVT-00542
+              <div className="space-y-2 w-full text-center">
+                <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-sm px-4 py-2 inline-block">
+                  {qrPayload ? `Payload: ${qrPayload}` : "Event ID: #EVT-00542"}
                 </Badge>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground mt-2">
                   This QR code is unique to this event and remains active throughout the event duration.
                 </p>
               </div>
