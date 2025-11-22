@@ -1,5 +1,6 @@
 "use client"
 
+import dynamic from "next/dynamic"
 import type React from "react"
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -26,6 +27,8 @@ import {
   ChevronRight,
   QrCode,
   X,
+  CheckCircle2,
+  Camera,
 } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Spinner } from "@/components/ui/spinner"
@@ -83,7 +86,15 @@ export default function ManagePage() {
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState<"Active" | "Upcoming" | "Finished">("Active")
   const [showQRModal, setShowQRModal] = useState(false)
+  const [showQRScanner, setShowQRScanner] = useState(false)
   const [qrPayload, setQrPayload] = useState<string | null>(null)
+  const [scanResult, setScanResult] = useState<string | null>(null)
+  const [paused, setPaused] = useState(false)
+
+  const Scanner = dynamic(
+    () => import("@yudiel/react-qr-scanner").then((mod) => mod.Scanner),
+    { ssr: false }
+  )
 
   // --- SUI TRANSACITON HANDLER ---
   const handleCreateEventOnChain = async (e: React.MouseEvent) => {
@@ -181,21 +192,19 @@ export default function ManagePage() {
         <div className="flex items-center gap-2 mb-10 p-1 bg-white/5 rounded-lg w-fit border border-white/10">
           <button
             onClick={() => setView("dashboard")}
-            className={`px-8 py-3 rounded-md text-sm font-medium transition-all ${
-              view === "dashboard"
-                ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/30"
-                : "text-muted-foreground hover:text-white hover:bg-white/5"
-            }`}
+            className={`px-8 py-3 rounded-md text-sm font-medium transition-all ${view === "dashboard"
+              ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/30"
+              : "text-muted-foreground hover:text-white hover:bg-white/5"
+              }`}
           >
             My Created Events
           </button>
           <button
             onClick={() => setView("create")}
-            className={`px-8 py-3 rounded-md text-sm font-medium transition-all ${
-              view === "create"
-                ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/30"
-                : "text-muted-foreground hover:text-white hover:bg-white/5"
-            }`}
+            className={`px-8 py-3 rounded-md text-sm font-medium transition-all ${view === "create"
+              ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/30"
+              : "text-muted-foreground hover:text-white hover:bg-white/5"
+              }`}
           >
             Create New Event
           </button>
@@ -515,12 +524,7 @@ export default function ManagePage() {
         {/* View B: My Created Events Dashboard */}
         {view === "dashboard" && (
           <>
-            <div className="flex items-center justify-between mb-8">
-              <Button className="bg-white/10 text-white hover:bg-white/20 border border-white/10">
-                <Download className="mr-2 h-4 w-4" />
-                Export Data
-              </Button>
-            </div>
+
 
             <div className="flex items-center gap-2 mb-8 p-1 bg-white/5 rounded-lg w-fit border border-white/10">
               {(["Active", "Upcoming", "Finished"] as const).map((tab) => (
@@ -530,11 +534,10 @@ export default function ManagePage() {
                     setActiveTab(tab)
                     setSelectedEventId(null)
                   }}
-                  className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${
-                    activeTab === tab
-                      ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/20"
-                      : "text-muted-foreground hover:text-white hover:bg-white/5"
-                  }`}
+                  className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${activeTab === tab
+                    ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/20"
+                    : "text-muted-foreground hover:text-white hover:bg-white/5"
+                    }`}
                 >
                   {tab}
                 </button>
@@ -554,23 +557,21 @@ export default function ManagePage() {
                   filteredEvents.map((event) => (
                     <GlassCard
                       key={event.id}
-                      className={`p-4 cursor-pointer transition-all group ${
-                        selectedEventId === event.id
-                          ? "border-cyan-500/50 bg-white/10 ring-1 ring-cyan-500/20"
-                          : "hover:bg-white/10"
-                      }`}
+                      className={`p-4 cursor-pointer transition-all group ${selectedEventId === event.id
+                        ? "border-cyan-500/50 bg-white/10 ring-1 ring-cyan-500/20"
+                        : "hover:bg-white/10"
+                        }`}
                       onClick={() => handleEventClick(event.id)}
                     >
                       <div className="flex justify-between items-start mb-2">
                         <Badge
                           variant="outline"
-                          className={`text-[10px] ${
-                            event.status === "Active"
-                              ? "border-green-500/30 text-green-400"
-                              : event.status === "Upcoming"
-                                ? "border-blue-500/30 text-blue-400"
-                                : "border-white/20 text-muted-foreground"
-                          }`}
+                          className={`text-[10px] ${event.status === "Active"
+                            ? "border-green-500/30 text-green-400"
+                            : event.status === "Upcoming"
+                              ? "border-blue-500/30 text-blue-400"
+                              : "border-white/20 text-muted-foreground"
+                            }`}
                         >
                           {event.status}
                         </Badge>
@@ -599,17 +600,12 @@ export default function ManagePage() {
                       {activeTab === "Active" && (
                         <div className="mt-4 pt-3 border-t border-white/10 space-y-2">
                           <Button
+                            onClick={() => setShowQRScanner(true)}
                             size="sm"
-                            className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white border-0 h-9 shadow-lg shadow-green-900/20"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              // use a constant payload placeholder; replace with real unique payload later
-                              setQrPayload(`EVENT-${event.id}:STATIC_TOKEN`)
-                              setShowQRModal(true)
-                            }}
+                            className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white border-0 shadow-lg shadow-cyan-900/20 h-8"
                           >
-                            <QrCode className="mr-2 h-4 w-4" />
-                            Show Entrance QR
+                            <Camera className="mr-2 h-4 w-4" />
+                            Scan Ticket
                           </Button>
                           <Button
                             size="sm"
@@ -731,73 +727,73 @@ export default function ManagePage() {
           </>
         )}
 
-        <Dialog
-          open={showQRModal}
-          onOpenChange={(open) => {
-            setShowQRModal(open)
-            if (!open) setQrPayload(null)
-          }}
-        >
-          <DialogContent className="max-w-2xl bg-[#03132b] border-white/10 p-12">
-            <button
-              onClick={() => {
-                setShowQRModal(false)
-                setQrPayload(null)
-              }}
-              className="absolute top-4 right-4 text-muted-foreground hover:text-white transition-colors"
-            >
-              <X className="h-6 w-6" />
-            </button>
-            <div className="text-center space-y-6">
-              <DialogHeader>
-                <DialogTitle className="text-3xl font-bold text-white mb-2">Entrance QR Code</DialogTitle>
-                <DialogDescription className="text-muted-foreground">Attendees scan this code at the entrance to check in</DialogDescription>
-              </DialogHeader>
+        <Dialog open={showQRScanner} onOpenChange={setShowQRScanner}>
+          <DialogContent className="max-w-lg bg-[#03132b] border-white/10">
+            <DialogHeader>
+              <DialogTitle className="text-white text-xl">Scan Check-in QR Code</DialogTitle>
+            </DialogHeader>
 
-              {/* Large QR Code Display */}
-              <div className="mx-auto w-96 h-96 bg-white rounded-2xl p-8 flex items-center justify-center shadow-2xl">
-                <div className="w-full h-full bg-black rounded-lg flex flex-col items-center justify-center p-4">
-                  {qrPayload ? (
-                    <>
-                      <img
-                        src={`https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=${encodeURIComponent(
-                          qrPayload
-                        )}`}
-                        alt="Event QR Code"
-                        className="h-64 w-64 bg-white/5 rounded-md"
-                      />
-                      <div className="mt-4 flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(qrPayload)
-                            } catch (e) {
-                              console.error("copy failed", e)
-                            }
-                          }}
-                        >
-                          Copy Payload
-                        </Button>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="text-sm text-muted-foreground">No QR payload yet. Open an event QR to generate one.</div>
-                  )}
+            <div className="relative aspect-square bg-black rounded-lg overflow-hidden border-2 border-white/10">
+              {!scanResult ? (
+                <div className="absolute inset-0">
+                  <Scanner
+                    onScan={(detected) => {
+                      if (!detected || detected.length === 0) return
+                      const first = detected[0]
+                      const value = (first as any).rawValue ?? null
+                      if (value) {
+                        setScanResult(String(value))
+                        setPaused(true)
+                      }
+                    }}
+                    onError={(err) => console.error("QR scanner error:", err)}
+                    constraints={{ facingMode: "environment", aspectRatio: 1 }}
+                    components={{ finder: true, torch: true }}
+                    scanDelay={500}
+                    paused={paused}
+                  />
                 </div>
-              </div>
-
-              <div className="space-y-2 w-full text-center">
-                <Badge className="bg-green-500/20 text-green-400 border-green-500/30 text-sm px-4 py-2 inline-block">
-                  {qrPayload ? `Payload: ${qrPayload}` : "Event ID: #EVT-00542"}
-                </Badge>
-                <p className="text-xs text-muted-foreground mt-2">
-                  This QR code is unique to this event and remains active throughout the event duration.
-                </p>
-              </div>
+              ) : (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle2 className="h-12 w-12 text-green-400" />
+                    <div>
+                      <h3 className="text-lg font-bold text-white">Check-in Successful</h3>
+                      <p className="text-sm text-muted-foreground">Scanned: <span className="font-mono">{scanResult}</span></p>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      onClick={() => {
+                        // simulate marking check-in then close
+                        setShowQRScanner(false)
+                        setTimeout(() => setScanResult(null), 300)
+                      }}
+                      className="bg-green-600 text-white"
+                    >
+                      Done
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        // resume scanning
+                        setScanResult(null)
+                        setPaused(false)
+                      }}
+                    >
+                      Scan Again
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
+
+            <p className="text-sm text-muted-foreground text-center mt-4">
+              Position the organizer's entrance QR code within the frame to check in.
+            </p>
           </DialogContent>
         </Dialog>
+
       </div>
     </div>
   )
