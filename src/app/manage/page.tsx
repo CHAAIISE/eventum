@@ -42,7 +42,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useSignAndExecuteTransaction, useCurrentAccount, useSuiClientQuery } from "@mysten/dapp-kit"
 import { Transaction } from "@mysten/sui/transactions"
 import { useToast } from "@/hooks/use-toast"
-import { PACKAGE_ID, MODULE_NAME } from "@/lib/contracts"
+import { PACKAGE_ID, MODULE_NAME, PUBLISHER_ID } from "@/lib/contracts"
 
 export default function ManagePage() {
   const [view, setView] = useState<"create" | "dashboard">("dashboard")
@@ -106,18 +106,7 @@ export default function ManagePage() {
     { enabled: !!currentAccount && view === "dashboard" }
   )
 
-  // 2. Récupérer le Publisher Object (Nécessaire pour create_event dans la nouvelle version)
-  // Note: Cela suppose que l'utilisateur connecté EST le propriétaire du package (celui qui a déployé)
-  const { data: publisherData } = useSuiClientQuery(
-    "getOwnedObjects",
-    {
-      owner: currentAccount?.address || "",
-      filter: { StructType: "0x2::package::Publisher" },
-    },
-    { enabled: !!currentAccount && view === "create" }
-  )
-
-  // 3. Extraire les Event IDs
+  // 2. Extraire les Event IDs
   const organizedEventIds = capsData?.data.map((cap) => {
     const fields = (cap.data?.content as any)?.fields
     return fields?.event_id
@@ -175,16 +164,6 @@ export default function ManagePage() {
     if (!currentAccount) {
         return toast({ title: "Connect Wallet", variant: "destructive" })
     }
-    
-    // On vérifie qu'on est le publisher (deployer)
-    const publisherObj = publisherData?.data?.find(obj => true)
-    if (!publisherObj) {
-        return toast({ 
-            title: "Publisher Object Missing", 
-            description: "You must be the contract deployer to create events.", 
-            variant: "destructive" 
-        })
-    }
 
     // On vérifie que les assets IA sont générés
     if (!generatedImages) {
@@ -226,7 +205,7 @@ export default function ManagePage() {
       tx.moveCall({
         target: `${PACKAGE_ID}::${MODULE_NAME}::create_event`,
         arguments: [
-          tx.object(publisherObj.data?.objectId!), // Arg 1: Publisher
+          tx.object(PUBLISHER_ID), // Arg 1: Publisher (hardcoded)
           tx.pure.string(createTitle),
           tx.pure.string(createDescription || "No description"),
           tx.pure.string(`${createDate} ${createTime}`),
@@ -440,7 +419,7 @@ export default function ManagePage() {
                             disabled={generating || !createTitle || !createCoverUrl}
                         >
                             {generating ? (
-                                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating & Uploading to Walrus...</>
+                                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating...</>
                             ) : (
                                 <><Camera className="mr-2 h-4 w-4" /> 1. Generate NFT Assets</>
                             )}

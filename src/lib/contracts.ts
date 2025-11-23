@@ -1,8 +1,9 @@
 //export const PACKAGE_ID = process.env.NEXT_PUBLIC_PACKAGE_ID!;
 //export const MODULE_NAME = process.env.NEXT_PUBLIC_MODULE_NAME || 'eventum';
 // export const EVENT_ID = process.env.NEXT_PUBLIC_EVENT_ID;
-export const PACKAGE_ID = "0xbd9e7b3976852fe126def67a7bd64abdab049be8548767a44900ad7ca6ddca2d";
-export const REGISTRY_ID = "0x5d4a7efa119fe2028cd22f8273779d074aa56c535882b1a3ec10270f392103bc";
+export const PACKAGE_ID = "0x159d139f5e374aabbed91004c137b5d11c439d25ad77b8111a403dc28386cdc8";
+export const REGISTRY_ID = "0xdf81469054115d57296a0aa730fb1bab8cba6324b2861dae24ee735a7ad29690";
+export const PUBLISHER_ID = "0x1b1f3908d11f448f3b18971987d68842c3ed2521d55e8b9aa81f3d09e09e20d8";
 export const MODULE_NAME = "eventum";
 export const EVENT_TYPE = `${PACKAGE_ID}::${MODULE_NAME}::Event`;
 export const TICKET_TYPE = `${PACKAGE_ID}::${MODULE_NAME}::Ticket`;
