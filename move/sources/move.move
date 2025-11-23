@@ -29,6 +29,9 @@ module eventum::eventum {
     const ESoldOut: u64 = 12;
     const EInvalidPercentage: u64 = 13;
     const ENotWhitelisted: u64 = 14;
+    const EPrizesNotDistributed: u64 = 15;
+    const EInsufficientFunds: u64 = 16;
+    const EEventAlreadyEnded: u64 = 17;
 
     public struct EVENTUM has drop {}
 
@@ -119,7 +122,7 @@ module eventum::eventum {
             total_percent = total_percent + *vector::borrow(&prize_distribution, i);
             i = i + 1;
         };
-        assert!(total_percent == 100 || total_percent == 0, EInvalidDistribution);
+        assert!(total_percent <= 100, EInvalidDistribution);
         assert!(royalty_percentage <= 100, EInvalidPercentage);
 
         // --- INITIALISATION POLICY  ---
@@ -280,9 +283,11 @@ module eventum::eventum {
         assert!(!event.prizes_distributed, EPrizesAlreadyDistributed);
         
         let dist_len = vector::length(&event.prize_distribution);
+        assert!(dist_len > 0, EInvalidDistribution);
         assert!(vector::length(&winner_ticket_ids) == dist_len, EWinnerCountMismatch);
 
         let total_pool = coin::value(&event.balance);
+        assert!(total_pool > 0, EInsufficientFunds);
         
         let mut i = 0;
         while (i < dist_len) {
@@ -319,6 +324,7 @@ module eventum::eventum {
         _ctx: &mut TxContext
     ) {
         assert!(object::id(event) == cap.event_id, ENotOrganizer);
+        assert!(!event.event_ended, EEventAlreadyEnded);
         
         let len = vector::length(&ranked_ticket_ids);
         let mut i = 0;
@@ -330,10 +336,6 @@ module eventum::eventum {
                 table::add(&mut event.winner_ranks, ticket_id, rank);
             };
             i = i + 1;
-        };
-        
-        if (!event.event_ended) {
-            event.event_ended = true;
         };
     }
 
@@ -393,6 +395,9 @@ module eventum::eventum {
         ctx: &mut TxContext
     ) {
         assert!(object::id(event) == cap.event_id, ENotOrganizer);
+        assert!(event.prizes_distributed || vector::length(&event.prize_distribution) == 0,
+            EPrizesNotDistributed
+        );
         
         let amount = coin::value(&event.balance);
         if (amount > 0) {
