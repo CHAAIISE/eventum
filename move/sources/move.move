@@ -32,6 +32,7 @@ module eventum::eventum {
     const EPrizesNotDistributed: u64 = 15;
     const EInsufficientFunds: u64 = 16;
     const EEventAlreadyEnded: u64 = 17;
+    const EHasPrizeDistribution: u64 = 18;
 
     public struct EVENTUM has drop {}
 
@@ -342,6 +343,18 @@ module eventum::eventum {
         };
     }
 
+    public entry fun end_event_without_prizes(
+        cap: &OrganizerCap,
+        event: &mut Event,
+        _ctx: &mut TxContext
+    ) {
+        assert!(object::id(event) == cap.event_id, ENotOrganizer);
+        assert!(vector::length(&event.prize_distribution) == 0, EHasPrizeDistribution);
+        assert!(!event.event_ended, EEventAlreadyEnded);
+        
+        event.event_ended = true;
+    }
+
     public entry fun claim_certification(
         event: &mut Event, 
         kiosk: &mut Kiosk,
@@ -395,6 +408,19 @@ module eventum::eventum {
                 transfer::public_transfer(prize_coin, tx_context::sender(ctx));
             }
         };
+    }
+
+    public entry fun deposit_prize_pool(
+        event: &mut Event, // Pas de OrganizerCap ici
+        payment: Coin<SUI>,
+        _ctx: &mut TxContext
+    ) {
+        // Pas de check d'OrganizerCap
+        
+        // On empêche juste de déposer si l'event est déjà fini/distribué pour éviter les erreurs
+        assert!(!event.prizes_distributed, EPrizesAlreadyDistributed);
+        
+        coin::join(&mut event.balance, payment);
     }
 
     public entry fun withdraw_funds(
