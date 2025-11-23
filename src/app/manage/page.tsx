@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic"
 import type React from "react"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
@@ -29,34 +29,28 @@ import {
   X,
   CheckCircle2,
   Camera,
+  Loader2,
+  Lock,
+  Unlock
 } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Spinner } from "@/components/ui/spinner"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"
 
 // --- SUI IMPORTS ---
-import { useSignAndExecuteTransaction, useCurrentAccount } from "@mysten/dapp-kit"
+import { useSignAndExecuteTransaction, useCurrentAccount, useSuiClientQuery } from "@mysten/dapp-kit"
 import { Transaction } from "@mysten/sui/transactions"
-import { useToast } from "@/hooks/use-toast" // Assure-toi d'avoir ce hook ou remplace par un console.log
+import { useToast } from "@/hooks/use-toast"
 import { PACKAGE_ID, MODULE_NAME } from "@/lib/contracts"
-
-interface Event {
-  id: number
-  title: string
-  date: string
-  attendees: number
-  status: "Active" | "Upcoming" | "Finished"
-  type: "standard" | "competition"
-}
 
 export default function ManagePage() {
   const [view, setView] = useState<"create" | "dashboard">("dashboard")
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const currentAccount = useCurrentAccount()
   const { toast } = useToast()
+  const [isProcessing, setIsProcessing] = useState(false)
 
   // --- FORM STATES ---
-  // states pour tous les champs du formulaire pour pouvoir les envoyer à la blockchain
   const [eventType, setEventType] = useState<"standard" | "competition">("standard")
   const [isPaid, setIsPaid] = useState(false)
   const [hasPrizePool, setHasPrizePool] = useState(false)
@@ -68,12 +62,9 @@ export default function ManagePage() {
   const [createSupply, setCreateSupply] = useState("")
   const [createPrice, setCreatePrice] = useState("")
   const [createRoyalty, setCreateRoyalty] = useState("")
-  
-  // Prize Pool Distribution (1st, 2nd, 3rd)
   const [dist1, setDist1] = useState("")
   const [dist2, setDist2] = useState("")
   const [dist3, setDist3] = useState("")
-
   const [createCoverUrl, setCreateCoverUrl] = useState("")
   
   // AI Generation States
@@ -81,13 +72,17 @@ export default function ManagePage() {
   const [generatedImages, setGeneratedImages] = useState<Record<string, string> | null>(null)
   const [generateError, setGenerateError] = useState<string | null>(null)
 
-  // Dashboard state
-  const [events, setEvents] = useState<Event[]>(INITIAL_EVENTS)
-  const [selectedEventId, setSelectedEventId] = useState<number | null>(null)
+  // --- DASHBOARD STATE ---
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<"Active" | "Upcoming" | "Finished">("Active")
+  
+  // Modals State
   const [showQRModal, setShowQRModal] = useState(false)
+  const [showDistributeModal, setShowDistributeModal] = useState(false)
+  const [winnerIdsInput, setWinnerIdsInput] = useState("")
+  
+  // Scanner State
   const [showQRScanner, setShowQRScanner] = useState(false)
-  const [qrPayload, setQrPayload] = useState<string | null>(null)
   const [scanResult, setScanResult] = useState<string | null>(null)
   const [paused, setPaused] = useState(false)
 
@@ -96,28 +91,80 @@ export default function ManagePage() {
     { ssr: false }
   )
 
-  // --- SUI TRANSACITON HANDLER ---
+  // --- DATA FETCHING (SUI) ---
+
+  // 1. Récupérer les OrganizerCap
+  const { data: capsData, isPending: isLoadingCaps, refetch: refetchCaps } = useSuiClientQuery(
+    "getOwnedObjects",
+    {
+      owner: currentAccount?.address || "",
+      filter: { StructType: `${PACKAGE_ID}::${MODULE_NAME}::OrganizerCap` },
+      options: { showContent: true },
+    },
+    { enabled: !!currentAccount && view === "dashboard" }
+  )
+
+  // 2. Extraire les Event IDs
+  const organizedEventIds = capsData?.data.map((cap) => {
+    const fields = (cap.data?.content as any)?.fields
+    return fields?.event_id
+  }) || []
+
+  // 3. Récupérer les Events
+  const { data: eventsData, isPending: isLoadingEvents, refetch: refetchEvents } = useSuiClientQuery(
+    "multiGetObjects",
+    {
+      ids: organizedEventIds,
+      options: { showContent: true },
+    },
+    { enabled: organizedEventIds.length > 0 }
+  )
+
+  // 4. Transformer les données pour l'UI
+  const myEvents = eventsData?.map((obj) => {
+    const fields = (obj.data?.content as any)?.fields
+    if (!fields) return null
+    
+    const isEnded = fields.event_ended
+    const isUpcoming = !fields.checkin_enabled && !isEnded
+    const isActive = fields.checkin_enabled && !isEnded
+
+    // Déterminer le status UI
+    let uiStatus: "Active" | "Upcoming" | "Finished" = "Upcoming"
+    if (isEnded) uiStatus = "Finished"
+    else if (isActive) uiStatus = "Active"
+
+    return {
+        id: obj.data?.objectId,
+        title: fields.title,
+        date: fields.date,
+        attendees: Number(fields.minted_count),
+        max: Number(fields.max_supply),
+        status: uiStatus,
+        type: fields.is_competition ? "competition" : "standard",
+        balance: fields.balance,
+        checkinEnabled: fields.checkin_enabled,
+        ended: fields.event_ended,
+        // On retrouve le Cap ID pour pouvoir agir sur l'event
+        capId: capsData?.data.find(c => (c.data?.content as any)?.fields?.event_id === obj.data?.objectId)?.data?.objectId
+    }
+  }).filter(e => e !== null) || []
+
+  const currentEvent = myEvents.find((e) => e?.id === selectedEventId)
+  const filteredEvents = myEvents.filter((e) => e?.status === activeTab)
+
+
+  // --- ACTIONS SUI ---
+
   const handleCreateEventOnChain = async (e: React.MouseEvent) => {
     e.preventDefault()
-
-    if (!currentAccount) {
-      toast({ title: "Wallet not connected", description: "Please connect your wallet first.", variant: "destructive" })
-      return
-    }
-
-    if (!createTitle || !createDate || !createSupply) {
-        toast({ title: "Missing fields", description: "Please fill in all required fields.", variant: "destructive" })
-        return
-    }
+    if (!currentAccount) return toast({ title: "Connect Wallet", variant: "destructive" })
+    if (!createTitle || !createDate || !createSupply) return toast({ title: "Missing Fields", variant: "destructive" })
 
     try {
       const tx = new Transaction()
-
-      // 1. Préparation des arguments
-      // Prix : Convertir SUI en MIST (x 1 milliard)
       const priceInMist = isPaid && createPrice ? parseFloat(createPrice) * 1_000_000_000 : 0
       
-      // Distribution des prix : Créer le vecteur
       const distribution = []
       if (hasPrizePool) {
         if (dist1) distribution.push(Number(dist1))
@@ -125,59 +172,73 @@ export default function ManagePage() {
         if (dist3) distribution.push(Number(dist3))
       }
 
-      // 2. Construction de la transaction Move
       tx.moveCall({
         target: `${PACKAGE_ID}::${MODULE_NAME}::create_event`,
         arguments: [
-          tx.pure.string(createTitle), // Title
-          tx.pure.string(createDescription || "No description"), // Description
-          tx.pure.string(`${createDate} ${createTime}`), // Date string combinée
-          tx.pure.u64(priceInMist), // Price
-          tx.pure.u64(Number(createSupply)), // Max Supply
-          tx.pure.u16(isPaid && createRoyalty ? Number(createRoyalty) : 0), // Royalty %
-          tx.pure.vector('u64', distribution), // Prize dist vector
-          tx.pure.bool(false), // is_soulbound (Hardcodé false pour l'instant ou ajoute un switch)
-          tx.pure.bool(eventType === "competition"), // is_competition
+          tx.pure.string(createTitle),
+          tx.pure.string(createDescription || "No description"),
+          tx.pure.string(`${createDate} ${createTime}`),
+          tx.pure.u64(priceInMist),
+          tx.pure.u64(Number(createSupply)),
+          tx.pure.u16(isPaid && createRoyalty ? Number(createRoyalty) : 0),
+          tx.pure.vector('u64', distribution),
+          tx.pure.bool(eventType === "competition"),
         ],
       })
 
-      // 3. Exécution
-      signAndExecute(
-        { transaction: tx },
-        {
-          onSuccess: (result) => {
-            console.log("Transaction Success:", result)
-            toast({ 
-                title: "Event Created!", 
-                description: `Transaction Digest: ${result.digest.slice(0, 10)}...` 
-            })
-            // Optionnel : Reset form ou redirect vers Dashboard
-            setView("dashboard")
-          },
-          onError: (error) => {
-            console.error("Transaction Error:", error)
-            toast({ title: "Error", description: error.message, variant: "destructive" })
-          },
+      signAndExecute({ transaction: tx }, {
+        onSuccess: (result) => {
+          toast({ title: "Event Created!", description: "Welcome to your new dashboard." })
+          setView("dashboard")
+          refetchCaps()
         },
-      )
+        onError: (error) => toast({ title: "Error", description: error.message, variant: "destructive" }),
+      })
     } catch (err) {
       console.error(err)
-      toast({ title: "Error building transaction", variant: "destructive" })
     }
   }
 
-  const handleEventClick = (id: number) => {
-    setSelectedEventId(id === selectedEventId ? null : id)
+  const handleToggleCheckin = (enabled: boolean) => {
+    if (!currentEvent || !currentEvent.capId) return
+    setIsProcessing(true)
+    const tx = new Transaction()
+    tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::toggle_checkin`,
+        arguments: [tx.object(currentEvent.capId), tx.object(currentEvent.id!), tx.pure.bool(enabled)]
+    })
+    signAndExecute({ transaction: tx }, {
+        onSuccess: () => {
+            toast({ title: `Check-in ${enabled ? 'Enabled' : 'Disabled'}` })
+            refetchEvents()
+            setIsProcessing(false)
+        },
+        onError: (e) => { toast({ title: "Error", description: e.message, variant: "destructive" }); setIsProcessing(false) }
+    })
   }
 
-  const handleEndEvent = (e: React.MouseEvent, id: number) => {
-    e.stopPropagation()
-    setEvents(events.map((ev) => (ev.id === id ? { ...ev, status: "Finished" } : ev)))
-    if (selectedEventId === id) setSelectedEventId(null)
+  const handleDistributePrizes = () => {
+    if (!currentEvent || !currentEvent.capId || !winnerIdsInput) return
+    const winnerIds = winnerIdsInput.split(/[\n,]+/).map(s => s.trim()).filter(s => s.length > 0)
+    
+    setIsProcessing(true)
+    const tx = new Transaction()
+    tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::distribute_prizes`,
+        arguments: [tx.object(currentEvent.capId), tx.object(currentEvent.id!), tx.pure.vector('address', winnerIds)]
+    })
+    signAndExecute({ transaction: tx }, {
+        onSuccess: () => {
+            toast({ title: "Prizes Distributed & Event Ended" })
+            setShowDistributeModal(false)
+            refetchEvents()
+            setIsProcessing(false)
+        },
+        onError: (e) => { toast({ title: "Error", description: e.message, variant: "destructive" }); setIsProcessing(false) }
+    })
   }
 
-  const currentEvent = events.find((e) => e.id === selectedEventId)
-  const filteredEvents = events.filter((e) => e.status === activeTab)
+  // --- RENDER ---
 
   return (
     <div className="min-h-screen pt-32 pb-20 px-4">
@@ -217,327 +278,127 @@ export default function ManagePage() {
               <form className="space-y-8">
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="title" className="text-white">
-                      Event Title
-                    </Label>
-                    <Input
-                      id="title"
-                      value={createTitle}
-                      onChange={(e) => setCreateTitle(e.target.value)}
-                      placeholder="e.g. Sui Builder House 2025"
-                      className="bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12 text-lg"
-                    />
+                    <Label htmlFor="title" className="text-white">Event Title</Label>
+                    <Input value={createTitle} onChange={(e) => setCreateTitle(e.target.value)} className="bg-white/5 border-white/10 text-white h-12 text-lg" />
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="description" className="text-white">
-                      Description
-                    </Label>
-                    <Textarea
-                      id="description"
-                      value={createDescription}
-                      onChange={(e) => setCreateDescription(e.target.value)}
-                      placeholder="Tell us about your event..."
-                      className="bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 min-h-[150px] resize-none text-base"
-                    />
+                    <Label htmlFor="description" className="text-white">Description</Label>
+                    <Textarea value={createDescription} onChange={(e) => setCreateDescription(e.target.value)} className="bg-white/5 border-white/10 text-white min-h-[100px]" />
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div className="space-y-2">
-                      <Label htmlFor="date" className="text-white">
-                        Date
-                      </Label>
-                      <div className="relative">
-                        <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          id="date"
-                          type="date"
-                          value={createDate}
-                          onChange={(e) => setCreateDate(e.target.value)}
-                          className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
-                        />
-                      </div>
+                        <Label className="text-white">Date</Label>
+                        <Input type="date" value={createDate} onChange={(e) => setCreateDate(e.target.value)} className="bg-white/5 text-white border-white/10" />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="time" className="text-white">
-                        Time
-                      </Label>
-                      <div className="relative">
-                        <Clock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          id="time"
-                          type="time"
-                          value={createTime}
-                          onChange={(e) => setCreateTime(e.target.value)}
-                          className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
-                        />
-                      </div>
+                        <Label className="text-white">Time</Label>
+                        <Input type="time" value={createTime} onChange={(e) => setCreateTime(e.target.value)} className="bg-white/5 text-white border-white/10" />
                     </div>
                   </div>
 
                   <div className="flex items-center justify-between p-4 rounded-lg bg-white/5 border border-white/10">
-                    <div className="space-y-0.5">
-                      <Label className="text-base text-white">Competition Mode</Label>
-                      <p className="text-sm text-muted-foreground">
-                        Enable ranking systems and scoreboards for this event.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={eventType === "competition"}
-                      onCheckedChange={(checked) => setEventType(checked ? "competition" : "standard")}
-                    />
+                    <Label className="text-white">Competition Mode</Label>
+                    <Switch checked={eventType === "competition"} onCheckedChange={(c) => setEventType(c ? "competition" : "standard")} />
                   </div>
 
                   <div className="space-y-4">
                     <div className="flex items-center justify-between p-4 rounded-lg bg-white/5 border border-white/10">
-                      <div className="space-y-0.5">
-                        <Label className="text-base text-white">Paid Event & Royalties</Label>
-                        <p className="text-sm text-muted-foreground">
-                          Require a ticket purchase and set secondary sales royalties.
-                        </p>
-                      </div>
+                      <Label className="text-white">Paid Event</Label>
                       <Switch checked={isPaid} onCheckedChange={setIsPaid} />
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div className="space-y-2">
-                        <Label htmlFor="supply" className="text-white">
-                          Total Ticket Supply
-                        </Label>
-                        <div className="relative">
-                          <Ticket className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input
-                            id="supply"
-                            type="number"
-                            placeholder="1000"
-                            value={createSupply}
-                            onChange={(e) => setCreateSupply(e.target.value)}
-                            className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
-                          />
+                    {isPaid && (
+                        <div className="grid grid-cols-2 gap-4">
+                             <div className="space-y-2">
+                                <Label className="text-white">Price (SUI)</Label>
+                                <Input type="number" value={createPrice} onChange={(e) => setCreatePrice(e.target.value)} className="bg-white/5 text-white border-white/10"/>
+                             </div>
+                             <div className="space-y-2">
+                                <Label className="text-white">Royalty %</Label>
+                                <Input type="number" value={createRoyalty} onChange={(e) => setCreateRoyalty(e.target.value)} className="bg-white/5 text-white border-white/10"/>
+                             </div>
                         </div>
-                      </div>
+                    )}
+                  </div>
 
-                      {isPaid && (
-                        <>
-                          <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
-                            <Label htmlFor="price" className="text-white">
-                              Price (SUI)
-                            </Label>
-                            <div className="relative">
-                              <Coins className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                              <Input
-                                id="price"
-                                type="number"
-                                placeholder="10"
-                                value={createPrice}
-                                onChange={(e) => setCreatePrice(e.target.value)}
-                                className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
-                              />
-                            </div>
-                          </div>
-
-                          <div className="space-y-2 animate-in fade-in slide-in-from-top-2 md:col-span-2">
-                            <Label htmlFor="royalty" className="text-white">
-                              Royalty Percentage (%)
-                            </Label>
-                            <div className="relative">
-                              <Percent className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                              <Input
-                                id="royalty"
-                                type="number"
-                                placeholder="5"
-                                max="100"
-                                value={createRoyalty}
-                                onChange={(e) => setCreateRoyalty(e.target.value)}
-                                className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
-                              />
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              Percentage of secondary sales revenue sent to the creator.
-                            </p>
-                          </div>
-                        </>
-                      )}
-                    </div>
+                  <div className="space-y-2">
+                    <Label className="text-white">Total Supply</Label>
+                    <Input type="number" value={createSupply} onChange={(e) => setCreateSupply(e.target.value)} className="bg-white/5 text-white border-white/10"/>
                   </div>
 
                   <div className="space-y-4">
                     <div className="flex items-center justify-between p-4 rounded-lg bg-white/5 border border-white/10">
-                      <div className="space-y-0.5">
-                        <Label className="text-base text-white">Prize Pool</Label>
-                        <p className="text-sm text-muted-foreground">Lock SUI to be distributed to winners.</p>
-                      </div>
+                      <Label className="text-white">Prize Pool</Label>
                       <Switch checked={hasPrizePool} onCheckedChange={setHasPrizePool} />
                     </div>
 
                     {hasPrizePool && (
-                      <div className="space-y-6 p-6 rounded-lg bg-cyan-500/5 border border-cyan-500/20 animate-in fade-in slide-in-from-top-2">
-                        <div className="space-y-2">
-                          <Label htmlFor="poolAmount" className="text-white">
-                            Total Prize Pool Estimation (SUI)
-                          </Label>
-                          <div className="relative">
-                            <Trophy className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-amber-400" />
-                            {/* Ce champ est purement indicatif dans ce contrat car le pool est rempli par les ventes */}
-                            <Input
-                              id="poolAmount"
-                              type="number"
-                              placeholder="5000"
-                              className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20 h-12"
-                            />
-                          </div>
-                          <p className="text-xs text-muted-foreground">Note: Prize pool is funded by ticket sales in this version.</p>
-                        </div>
-
-                        <div className="space-y-2">
-                          <Label className="text-white">Distribution Percentages (%)</Label>
-                          <div className="grid grid-cols-3 gap-4">
-                            <div className="space-y-1">
-                              <span className="text-xs text-muted-foreground">1st Place</span>
-                              <Input 
-                                placeholder="50" 
-                                value={dist1}
-                                onChange={(e) => setDist1(e.target.value)}
-                                className="bg-white/5 border-white/10 text-white text-center" 
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-xs text-muted-foreground">2nd Place</span>
-                              <Input 
-                                placeholder="30" 
-                                value={dist2}
-                                onChange={(e) => setDist2(e.target.value)}
-                                className="bg-white/5 border-white/10 text-white text-center" 
-                              />
-                            </div>
-                            <div className="space-y-1">
-                              <span className="text-xs text-muted-foreground">3rd Place</span>
-                              <Input 
-                                placeholder="20" 
-                                value={dist3}
-                                onChange={(e) => setDist3(e.target.value)}
-                                className="bg-white/5 border-white/10 text-white text-center" 
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
+                         <div className="grid grid-cols-3 gap-4">
+                             <Input placeholder="1st %" value={dist1} onChange={(e) => setDist1(e.target.value)} className="bg-white/5 text-white border-white/10"/>
+                             <Input placeholder="2nd %" value={dist2} onChange={(e) => setDist2(e.target.value)} className="bg-white/5 text-white border-white/10"/>
+                             <Input placeholder="3rd %" value={dist3} onChange={(e) => setDist3(e.target.value)} className="bg-white/5 text-white border-white/10"/>
+                         </div>
                     )}
                   </div>
 
                   <div className="space-y-2">
                     <Label className="text-white">Cover Image</Label>
-                    <div className="border-2 border-dashed border-white/10 rounded-lg p-8 text-center hover:bg-white/5 hover:border-cyan-500/30 transition-all cursor-pointer group">
-                      <div className="mx-auto h-12 w-12 rounded-full bg-white/5 flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                        <Upload className="h-6 w-6 text-muted-foreground group-hover:text-cyan-400" />
-                      </div>
-                      <p className="text-sm text-muted-foreground group-hover:text-white transition-colors">
-                        Click to upload or drag and drop
-                      </p>
-                      <p className="text-xs text-muted-foreground/50 mt-2">SVG, PNG, JPG or GIF (MAX. 800x400px)</p>
-                    </div>
-                    <div className="relative mt-2">
-                      <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                      <Input
-                        placeholder="Or paste image URL..."
-                        value={createCoverUrl}
-                        onChange={(e) => setCreateCoverUrl(e.target.value)}
-                        className="pl-10 bg-white/5 border-white/10 text-white focus:border-cyan-500/50 focus:ring-cyan-500/20"
-                      />
-                    </div>
+                    <Input placeholder="Image URL" value={createCoverUrl} onChange={(e) => setCreateCoverUrl(e.target.value)} className="bg-white/5 text-white border-white/10" />
                   </div>
                 </div>
 
                 <Button 
                     onClick={handleCreateEventOnChain}
-                    className="w-full h-14 text-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white border-0 shadow-lg shadow-cyan-900/20 font-bold tracking-wide mt-8 group"
+                    className="w-full h-14 text-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold"
                 >
-                  <Rocket className="mr-2 h-5 w-5 group-hover:animate-pulse" />
+                  <Rocket className="mr-2 h-5 w-5" />
                   Launch Event On-Chain
                 </Button>
-                <div className="mt-4">
-                  <Button
-                    type="button" // Important pour pas trigger le submit si c'était dans un form
-                    onClick={async () => {
-                      // generate assets for the event title
-                      setGenerateError(null)
-                      setGeneratedImages(null)
-                      if (!createTitle) {
-                        setGenerateError("Please enter an event title first")
-                        return
-                      }
-                      if (!createCoverUrl) {
-                        setGenerateError("Please provide a cover image URL first")
-                        return
-                      }
-                      try {
-                        setGenerating(true)
-                        const payload = { eventTitle: createTitle.trim(), coverImageUrl: createCoverUrl.trim() }
-                        const res = await fetch("/api/generate-assets", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify(payload),
-                        })
-                        const data = await res.json()
-                        if (!res.ok) {
-                          setGenerateError(data?.error || "Generation failed")
-                        } else {
-                          setGeneratedImages(data.images || null)
-                        }
-                      } catch (err: any) {
-                        setGenerateError(err?.message || String(err))
-                      } finally {
-                        setGenerating(false)
-                      }
-                    }}
-                    className="w-full h-12 bg-emerald-600 text-white rounded-md"
-                    disabled={generating}
-                  >
-                    {generating ? (
-                      <div className="flex items-center justify-center gap-2">
-                        <Spinner className="h-4 w-4 text-white" />
-                        <span>Generating NFTs...</span>
-                      </div>
-                    ) : (
-                      "Generate NFT's"
-                    )}
-                  </Button>
 
-                  {generateError && <p className="text-sm text-red-400 mt-2">{generateError}</p>}
-
-                  {generatedImages && (
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-4">
-                      {Object.entries(generatedImages).map(([key, url]) => (
-                        <div key={key} className="flex flex-col items-center">
-                          <img src={url} alt={key} className="h-28 w-28 object-cover rounded-md border" />
-                          <span className="text-xs text-muted-foreground mt-2">{key}</span>
+                {/* AI GENERATION SECTION (Conservée) */}
+                <div className="mt-4 border-t border-white/10 pt-6">
+                    <h4 className="text-white text-sm mb-4">AI Asset Factory</h4>
+                    <Button
+                        type="button"
+                        onClick={async () => {
+                            setGenerateError(null)
+                            if (!createTitle) return setGenerateError("Title required")
+                            try {
+                                setGenerating(true)
+                                // Simulation ou appel API réel ici
+                                const payload = { eventTitle: createTitle, coverImageUrl: createCoverUrl }
+                                const res = await fetch("/api/generate-assets", { method: "POST", body: JSON.stringify(payload) })
+                                const data = await res.json()
+                                if(data.images) setGeneratedImages(data.images)
+                            } catch(e) { console.error(e) } finally { setGenerating(false) }
+                        }}
+                        className="w-full bg-emerald-600 text-white"
+                        disabled={generating}
+                    >
+                        {generating ? <Spinner className="mr-2" /> : "Generate NFT Assets"}
+                    </Button>
+                    {generatedImages && (
+                        <div className="grid grid-cols-5 gap-2 mt-4">
+                            {Object.entries(generatedImages).map(([k,v]) => <img key={k} src={v} className="h-16 w-16 rounded border border-white/20"/>)}
                         </div>
-                      ))}
-                    </div>
-                  )}
+                    )}
                 </div>
               </form>
             </GlassCard>
           </div>
         )}
 
-        {/* View B: My Created Events Dashboard */}
+        {/* View B: Dashboard */}
         {view === "dashboard" && (
           <>
-
-
             <div className="flex items-center gap-2 mb-8 p-1 bg-white/5 rounded-lg w-fit border border-white/10">
               {(["Active", "Upcoming", "Finished"] as const).map((tab) => (
                 <button
                   key={tab}
-                  onClick={() => {
-                    setActiveTab(tab)
-                    setSelectedEventId(null)
-                  }}
-                  className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${activeTab === tab
-                    ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/20"
-                    : "text-muted-foreground hover:text-white hover:bg-white/5"
-                    }`}
+                  onClick={() => { setActiveTab(tab); setSelectedEventId(null); }}
+                  className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${activeTab === tab ? "bg-cyan-600 text-white" : "text-muted-foreground hover:bg-white/5"}`}
                 >
                   {tab}
                 </button>
@@ -548,178 +409,109 @@ export default function ManagePage() {
               {/* Events List */}
               <div className="lg:col-span-4 space-y-4">
                 <h2 className="text-xl font-bold text-white mb-4">{activeTab} Events</h2>
-
-                {filteredEvents.length === 0 ? (
+                
+                {isLoadingEvents ? (
+                     <div className="flex justify-center py-10"><Loader2 className="animate-spin text-cyan-400"/></div>
+                ) : filteredEvents.length === 0 ? (
                   <div className="text-center py-12 bg-white/5 rounded-xl border border-white/10 border-dashed">
                     <p className="text-muted-foreground">No {activeTab.toLowerCase()} events found.</p>
                   </div>
                 ) : (
                   filteredEvents.map((event) => (
                     <GlassCard
-                      key={event.id}
-                      className={`p-4 cursor-pointer transition-all group ${selectedEventId === event.id
-                        ? "border-cyan-500/50 bg-white/10 ring-1 ring-cyan-500/20"
-                        : "hover:bg-white/10"
-                        }`}
-                      onClick={() => handleEventClick(event.id)}
+                      key={event!.id}
+                      className={`p-4 cursor-pointer transition-all group ${selectedEventId === event!.id ? "border-cyan-500/50 bg-white/10" : "hover:bg-white/10"}`}
+                      onClick={() => setSelectedEventId(Number(event!.id) ? Number(event!.id) : event!.id as any)} // Hack typage id
                     >
                       <div className="flex justify-between items-start mb-2">
-                        <Badge
-                          variant="outline"
-                          className={`text-[10px] ${event.status === "Active"
-                            ? "border-green-500/30 text-green-400"
-                            : event.status === "Upcoming"
-                              ? "border-blue-500/30 text-blue-400"
-                              : "border-white/20 text-muted-foreground"
-                            }`}
-                        >
-                          {event.status}
+                        <Badge variant="outline" className={event!.status === "Active" ? "text-green-400 border-green-500/30" : "text-muted-foreground"}>
+                          {event!.status}
                         </Badge>
-                        <Badge
-                          variant="secondary"
-                          className="bg-blue-500/10 text-blue-400 border-blue-500/20 text-[10px]"
-                        >
-                          {event.type === "competition" ? "Competition" : "Standard"}
-                        </Badge>
+                        <Badge className="bg-blue-500/10 text-blue-400">{event!.type}</Badge>
                       </div>
-                      <h3 className="font-bold text-white mb-1">{event.title}</h3>
+                      <h3 className="font-bold text-white mb-1">{event!.title}</h3>
                       <div className="flex items-center gap-2 text-xs text-cyan-400 mb-3">
-                        <Calendar className="h-3 w-3" />
-                        {event.date}
+                        <Calendar className="h-3 w-3" /> {event!.date}
                       </div>
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <div className="flex items-center gap-1">
-                          <Users className="h-3 w-3" />
-                          {event.attendees} Attendees
-                        </div>
-                        <ChevronRight
-                          className={`h-4 w-4 transition-transform ${selectedEventId === event.id ? "rotate-90 text-cyan-400" : ""}`}
-                        />
+                        <div className="flex items-center gap-1"><Users className="h-3 w-3" /> {event!.attendees} / {event!.max}</div>
+                        <ChevronRight className="h-4 w-4"/>
                       </div>
-
-                      {activeTab === "Active" && (
-                        <div className="mt-4 pt-3 border-t border-white/10 space-y-2">
-                          <Button
-                            onClick={() => setShowQRScanner(true)}
-                            size="sm"
-                            className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white border-0 shadow-lg shadow-cyan-900/20 h-8"
-                          >
-                            <Camera className="mr-2 h-4 w-4" />
-                            Scan Ticket
-                          </Button>
-                          <Button
-                            size="sm"
-                            className="w-full bg-red-500/10 text-red-400 hover:bg-red-500/20 hover:text-red-300 border border-red-500/20 h-8"
-                            onClick={(e) => handleEndEvent(e, event.id)}
-                          >
-                            End Event & Distribute
-                          </Button>
-                        </div>
-                      )}
                     </GlassCard>
                   ))
                 )}
               </div>
 
-              {/* Participant Management */}
+              {/* Event Details & Management */}
               <div className="lg:col-span-8">
                 {selectedEventId && currentEvent ? (
-                  <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
-                      <div>
-                        <div className="flex items-center gap-3 mb-1">
-                          <h2 className="text-xl font-bold text-white">Participants: {currentEvent.title}</h2>
-                          {currentEvent.status === "Finished" && (
-                            <Badge className="bg-white/10 text-white border-white/20">Completed</Badge>
-                          )}
+                  <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
+                    <div className="flex justify-between items-start">
+                        <div>
+                            <h2 className="text-2xl font-bold text-white">{currentEvent.title}</h2>
+                            <p className="text-sm font-mono text-muted-foreground">ID: {currentEvent.id}</p>
                         </div>
-                        <p className="text-sm text-muted-foreground">
-                          Manage attendance {currentEvent.type === "competition" && "and assign rankings"}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="relative">
-                          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                          <Input
-                            placeholder="Search wallet..."
-                            className="pl-10 bg-white/5 border-white/10 w-[200px] h-9 text-sm"
-                          />
+                        {/* ACTIONS ORGANISATEUR */}
+                        <div className="flex gap-2">
+                            <Button 
+                                onClick={() => handleToggleCheckin(!currentEvent.checkinEnabled)}
+                                disabled={currentEvent.ended || isProcessing}
+                                className={currentEvent.checkinEnabled ? "bg-red-500/20 text-red-400" : "bg-green-500/20 text-green-400"}
+                            >
+                                {isProcessing ? <Loader2 className="animate-spin mr-2"/> : currentEvent.checkinEnabled ? <Lock className="mr-2 h-4 w-4"/> : <Unlock className="mr-2 h-4 w-4"/>}
+                                {currentEvent.checkinEnabled ? "Disable Check-in" : "Enable Check-in"}
+                            </Button>
+                            <Button onClick={() => setShowQRModal(true)} variant="outline" className="border-white/10"><QrCode className="mr-2 h-4 w-4"/> Event QR</Button>
                         </div>
-                        {currentEvent.type === "competition" && currentEvent.status !== "Finished" && (
-                          <Button className="bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white border-0 h-9">
-                            <Save className="mr-2 h-4 w-4" />
-                            Submit Rankings
-                          </Button>
-                        )}
-                      </div>
                     </div>
 
+                    {/* STATS */}
+                    <div className="grid grid-cols-3 gap-4">
+                        <GlassCard className="p-4 text-center">
+                            <p className="text-xs text-muted-foreground uppercase">Tickets Sold</p>
+                            <p className="text-2xl font-bold text-white">{currentEvent.attendees}</p>
+                        </GlassCard>
+                        <GlassCard className="p-4 text-center">
+                            <p className="text-xs text-muted-foreground uppercase">Revenue (SUI)</p>
+                            <p className="text-2xl font-bold text-cyan-400">{Number(currentEvent.balance) / 1e9}</p>
+                        </GlassCard>
+                        <GlassCard className="p-4 text-center">
+                             <p className="text-xs text-muted-foreground uppercase">Check-in Status</p>
+                             <p className={`text-xl font-bold ${currentEvent.checkinEnabled ? "text-green-400" : "text-yellow-400"}`}>
+                                {currentEvent.checkinEnabled ? "OPEN" : "CLOSED"}
+                             </p>
+                        </GlassCard>
+                    </div>
+                    
+                    {/* DANGER ZONE */}
+                    {!currentEvent.ended && currentEvent.type === 'competition' && (
+                        <div className="p-6 border border-red-500/20 rounded-xl bg-red-500/5">
+                            <h3 className="text-lg font-bold text-red-400 mb-2">End Event & Distribute</h3>
+                            <p className="text-sm text-muted-foreground mb-4">Finalize the event and send prizes to winners.</p>
+                            <Button 
+                                onClick={() => setShowDistributeModal(true)}
+                                className="bg-red-600 hover:bg-red-700 text-white w-full"
+                            >
+                                <Trophy className="mr-2 h-4 w-4" /> Distribute Prizes
+                            </Button>
+                        </div>
+                    )}
+
+                    {/* PARTICIPANTS PLACEHOLDER */}
                     <GlassCard className="overflow-hidden">
-                      <Table>
-                        <TableHeader className="bg-white/5">
-                          <TableRow className="border-white/10 hover:bg-transparent">
-                            <TableHead className="text-muted-foreground">Participant</TableHead>
-                            <TableHead className="text-muted-foreground">Status</TableHead>
-                            <TableHead className="text-muted-foreground">Check-in Time</TableHead>
-                            {currentEvent.type === "competition" && (
-                              <TableHead className="text-muted-foreground w-[150px]">Rank/Score</TableHead>
-                            )}
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {PARTICIPANTS.map((participant) => (
-                            <TableRow key={participant.address} className="border-white/5 hover:bg-white/5">
-                              <TableCell>
-                                <div className="flex items-center gap-3">
-                                  <div className="h-8 w-8 rounded-full bg-gradient-to-br from-cyan-500/20 to-blue-500/20 border border-white/10 flex items-center justify-center text-xs text-white font-mono">
-                                    {participant.address.slice(0, 2)}
-                                  </div>
-                                  <div>
-                                    <p className="text-sm font-medium text-white font-mono">{participant.address}</p>
-                                    <p className="text-xs text-muted-foreground">{participant.ens}</p>
-                                  </div>
-                                </div>
-                              </TableCell>
-                              <TableCell>
-                                <Badge
-                                  className={
-                                    participant.status === "Checked In"
-                                      ? "bg-green-500/10 text-green-400 border-green-500/20"
-                                      : "bg-yellow-500/10 text-yellow-400 border-yellow-500/20"
-                                  }
-                                >
-                                  {participant.status}
-                                </Badge>
-                              </TableCell>
-                              <TableCell className="text-sm text-muted-foreground">{participant.checkInTime}</TableCell>
-                              {currentEvent.type === "competition" && (
-                                <TableCell>
-                                  <div className="flex items-center gap-2">
-                                    <Input
-                                      defaultValue={participant.score}
-                                      disabled={currentEvent.status === "Finished"}
-                                      className="bg-background/50 border-white/10 h-8 w-20 text-right"
-                                    />
-                                    {participant.score > 90 && <Trophy className="h-4 w-4 text-amber-400" />}
-                                  </div>
-                                </TableCell>
-                              )}
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
+                        <div className="p-4 border-b border-white/10"><h3 className="font-bold text-white">Participants</h3></div>
+                        <div className="p-8 text-center">
+                            <Users className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
+                            <p className="text-muted-foreground">Detailed participant list requires an external Indexer.</p>
+                            <p className="text-sm text-cyan-400 mt-2">{currentEvent.attendees} tickets minted on-chain.</p>
+                        </div>
                     </GlassCard>
                   </div>
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-center p-10 border-2 border-dashed border-white/10 rounded-xl bg-white/5">
-                    <div className="h-16 w-16 rounded-full bg-white/5 flex items-center justify-center mb-4">
-                      <Users className="h-8 w-8 text-muted-foreground" />
-                    </div>
-                    <h3 className="text-xl font-bold text-white mb-2">Select an Event</h3>
-                    <p className="text-muted-foreground max-w-sm">
-                      Select an event from the list to manage participants, view analytics, and assign on-chain
-                      rankings.
-                    </p>
+                    <Users className="h-8 w-8 text-muted-foreground mb-4" />
+                    <h3 className="text-xl font-bold text-white">Select an Event</h3>
+                    <p className="text-muted-foreground">View details and manage your event.</p>
                   </div>
                 )}
               </div>
@@ -727,70 +519,47 @@ export default function ManagePage() {
           </>
         )}
 
+        {/* MODALS */}
+        
+        {/* 1. QR Code Event (Pour que les users scannent) */}
+        <Dialog open={showQRModal} onOpenChange={setShowQRModal}>
+            <DialogContent className="bg-[#03132b] border-white/10">
+                <DialogHeader><DialogTitle className="text-white text-center">Event Check-in QR</DialogTitle></DialogHeader>
+                <div className="flex justify-center p-4 bg-white rounded-lg">
+                     <img src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${selectedEventId}`} />
+                </div>
+                <p className="text-center text-cyan-400 text-xs font-mono mt-2">{selectedEventId}</p>
+            </DialogContent>
+        </Dialog>
+
+        {/* 2. Distribute Prizes */}
+        <Dialog open={showDistributeModal} onOpenChange={setShowDistributeModal}>
+             <DialogContent className="bg-[#03132b] border-white/10">
+                 <DialogHeader>
+                     <DialogTitle className="text-white">Distribute Prizes</DialogTitle>
+                     <DialogDescription>Enter winning Ticket IDs (one per line).</DialogDescription>
+                 </DialogHeader>
+                 <Textarea 
+                    className="bg-white/5 border-white/10 text-white font-mono"
+                    placeholder="0x...\n0x..."
+                    value={winnerIdsInput}
+                    onChange={(e) => setWinnerIdsInput(e.target.value)}
+                 />
+                 <DialogFooter>
+                     <Button onClick={handleDistributePrizes} disabled={isProcessing} className="bg-red-600 text-white">
+                         {isProcessing ? <Loader2 className="animate-spin"/> : "Confirm Distribution"}
+                     </Button>
+                 </DialogFooter>
+             </DialogContent>
+        </Dialog>
+
+        {/* 3. Scanner (Gardé si tu veux faire de la vérif manuelle, optionnel) */}
         <Dialog open={showQRScanner} onOpenChange={setShowQRScanner}>
           <DialogContent className="max-w-lg bg-[#03132b] border-white/10">
-            <DialogHeader>
-              <DialogTitle className="text-white text-xl">Scan Check-in QR Code</DialogTitle>
-            </DialogHeader>
-
-            <div className="relative aspect-square bg-black rounded-lg overflow-hidden border-2 border-white/10">
-              {!scanResult ? (
-                <div className="absolute inset-0">
-                  <Scanner
-                    onScan={(detected) => {
-                      if (!detected || detected.length === 0) return
-                      const first = detected[0]
-                      const value = (first as any).rawValue ?? null
-                      if (value) {
-                        setScanResult(String(value))
-                        setPaused(true)
-                      }
-                    }}
-                    onError={(err) => console.error("QR scanner error:", err)}
-                    constraints={{ facingMode: "environment", aspectRatio: 1 }}
-                    components={{ finder: true, torch: true }}
-                    scanDelay={500}
-                    paused={paused}
-                  />
-                </div>
-              ) : (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6">
-                  <div className="flex items-center gap-3">
-                    <CheckCircle2 className="h-12 w-12 text-green-400" />
-                    <div>
-                      <h3 className="text-lg font-bold text-white">Check-in Successful</h3>
-                      <p className="text-sm text-muted-foreground">Scanned: <span className="font-mono">{scanResult}</span></p>
-                    </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button
-                      onClick={() => {
-                        // simulate marking check-in then close
-                        setShowQRScanner(false)
-                        setTimeout(() => setScanResult(null), 300)
-                      }}
-                      className="bg-green-600 text-white"
-                    >
-                      Done
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        // resume scanning
-                        setScanResult(null)
-                        setPaused(false)
-                      }}
-                    >
-                      Scan Again
-                    </Button>
-                  </div>
-                </div>
-              )}
+            <div className="relative aspect-square bg-black rounded-lg overflow-hidden">
+                <Scanner onScan={(r) => { if(r?.[0]?.rawValue) { setScanResult(r[0].rawValue); setPaused(true); } }} />
             </div>
-
-            <p className="text-sm text-muted-foreground text-center mt-4">
-              Position the organizer's entrance QR code within the frame to check in.
-            </p>
+            {scanResult && <p className="text-center text-green-400 font-bold mt-4">Scanned: {scanResult}</p>}
           </DialogContent>
         </Dialog>
 
@@ -798,68 +567,3 @@ export default function ManagePage() {
     </div>
   )
 }
-
-const INITIAL_EVENTS: Event[] = [
-  {
-    id: 1,
-    title: "Sui Builder House: Denver",
-    date: "Mar 15, 2025",
-    attendees: 458,
-    status: "Active",
-    type: "competition",
-  },
-  {
-    id: 2,
-    title: "Move Language Workshop",
-    date: "Apr 12, 2025",
-    attendees: 120,
-    status: "Upcoming",
-    type: "standard",
-  },
-  {
-    id: 3,
-    title: "Sui Summer Hackathon",
-    date: "Jun 01, 2025",
-    attendees: 850,
-    status: "Upcoming",
-    type: "competition",
-  },
-]
-
-const PARTICIPANTS = [
-  {
-    address: "0x71...3a92",
-    ens: "builder.sui",
-    status: "Checked In",
-    checkInTime: "10:42 AM",
-    score: 95,
-  },
-  {
-    address: "0x3a...9b21",
-    ens: "pixel_artist.sui",
-    status: "Checked In",
-    checkInTime: "10:15 AM",
-    score: 88,
-  },
-  {
-    address: "0x9c...1f44",
-    ens: "defi_king.sui",
-    status: "Pending",
-    checkInTime: "-",
-    score: 0,
-  },
-  {
-    address: "0x2d...8e11",
-    ens: "-",
-    status: "Checked In",
-    checkInTime: "11:30 AM",
-    score: 92,
-  },
-  {
-    address: "0x5f...2a33",
-    ens: "move_master.sui",
-    status: "Checked In",
-    checkInTime: "09:55 AM",
-    score: 100,
-  },
-]
