@@ -55,12 +55,7 @@ module eventum::eventum {
         checkin_enabled: bool,
         event_ended: bool,
         winner_ranks: Table<ID, u64>,
-        
-        // --- CHANGEMENT ICI ---
-        // On ne stocke plus les owners, mais les montants en attente par Ticket ID
-        pending_prizes: Table<ID, u64>, 
-        
-        is_soulbound: bool,
+        pending_prizes: Table<ID, u64>,
         is_competition: bool,
     }
 
@@ -103,7 +98,7 @@ module eventum::eventum {
         transfer::public_transfer(policy_cap, tx_context::sender(ctx));
     }
 
-    // --- CREATION AVEC NOUVELLE TABLE ---
+    // --- CREATION EVENT ---
     public entry fun create_event(
         title: vector<u8>,
         description: vector<u8>,
@@ -112,7 +107,6 @@ module eventum::eventum {
         max_supply: u64,
         royalty_percentage: u16,
         prize_distribution: vector<u64>,
-        is_soulbound: bool,
         is_competition: bool,
         ctx: &mut TxContext
     ) {
@@ -124,6 +118,7 @@ module eventum::eventum {
             i = i + 1;
         };
         assert!(total_percent <= 100, EInvalidDistribution);
+        assert!(royalty_percentage <= 100, EInvalidPercentage);
 
         let event_uid = object::new(ctx);
         let event_id = object::uid_to_inner(&event_uid);
@@ -145,9 +140,7 @@ module eventum::eventum {
             checkin_enabled: false,
             event_ended: false,
             winner_ranks: table::new(ctx),
-            // Initialisation de la table des prix en attente
-            pending_prizes: table::new(ctx), 
-            is_soulbound: is_soulbound,
+            pending_prizes: table::new(ctx),
             is_competition: is_competition
         };
 
@@ -358,6 +351,7 @@ module eventum::eventum {
         // Le NFT est relâché (fin du borrow) avec ses nouvelles métadonnées
     }
 
+    // --- CONFIGURATION ROYALTIES (À APPELER APRÈS CRÉATION) ---
     public entry fun configure_royalties(
         cap: &OrganizerCap,
         event: &Event,
@@ -367,13 +361,14 @@ module eventum::eventum {
     ) {
         assert!(object::id(event) == cap.event_id, ENotOrganizer);
         assert!(event.royalty_percentage <= 100, EInvalidPercentage);
+        
         if (event.price > 0 && event.royalty_percentage > 0) {
-           custom_royalty_rule::add(
-            policy,
-            policy_cap,
-            (event.royalty_percentage as u16) * 100,
-            0
-        );
+            custom_royalty_rule::add(
+                policy,
+                policy_cap,
+                event.royalty_percentage * 100,
+                0
+            );
         };
     }
 
