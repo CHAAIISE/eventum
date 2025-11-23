@@ -31,39 +31,30 @@ export async function POST(req: Request) {
 
       // 2. BADGE PARTICIPANT : Style "Sticker/Badge"
       attended: {
-        type: "original",
-        url: coverImageUrl,
-        //type: "generate",
-        //prompt: `A massive trophy medal made of solid LIQUID STEEL. Molten steel texture, shiny, metallic gray. No text or numbers.`,
+        type: "generate",
+        prompt: `A massive trophy medal made of solid LIQUID STEEL. Molten steel texture, shiny, metallic gray. No text or numbers.`,
       },
 
       // 3. OR : Le prompt qui a marché
       gold: {
-        type: "original",
-        url: coverImageUrl,
-        //type: "generate",
-        //prompt: `A massive trophy medal made of solid LIQUID GOLD. Molten gold texture, shiny, metallic yellow. No text or numbers.`,
+        type: "generate",
+        prompt: `A massive trophy medal made of solid LIQUID GOLD. Molten gold texture, shiny, metallic yellow. No text or numbers.`,
       },
 
       // 4. ARGENT : Chrome/Métal blanc
       silver: {
-        type: "original",
-        url: coverImageUrl,
-        //type: "generate",
-        //prompt: `A massive trophy medal made of solid LIQUID SILVER. Molten silver texture, shiny, metallic chrome texture. No text or numbers.`,
+        type: "generate",
+        prompt: `A massive trophy medal made of solid LIQUID SILVER. Molten silver texture, shiny, metallic chrome texture. No text or numbers.`,
       },
 
       // 5. BRONZE : Métal vieilli/marron
       bronze: {
-        type: "original",
-        url: coverImageUrl,
-        //type: "generate",
-        //prompt: `A massive trophy medal made of solid LIQUID BRONZE. Molten bronze texture, shiny, metallic brown texture. No text or numbers.`,
+        type: "generate",
+        prompt: `A massive trophy medal made of solid LIQUID BRONZE. Molten bronze texture, shiny, metallic brown texture. No text or numbers.`,
       },
-    };
-
+    }
     // Lancement des générations SÉQUENTIELLES avec délai entre chaque appel
-    const delayMs = 10; // 10 secondes entre chaque génération
+    const delayMs = 10000; // 10 secondes entre chaque génération
     const entries = Object.entries(assetsConfig);
     const results: Array<{ key: string; url: string }> = [];
 

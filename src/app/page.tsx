@@ -31,8 +31,8 @@ export default function Home() {
       location: "On-Chain / Sui Network", 
       // Mapping du boolean is_competition vers une catégorie UI
       category: fields.is_competition ? "Competition" : "Standard",
-      // Le contrat n'a pas d'image pour l'instant, on utilise un placeholder joli
-      image: "/placeholder.svg?height=400&width=600", 
+      // Récupération de l'image depuis asset_urls (premier élément du vecteur)
+      image: fields.asset_urls && fields.asset_urls.length > 0 ? fields.asset_urls[0] : "/placeholder.svg?height=400&width=600", 
       organizer: "Community Organizer", // On pourrait afficher l'adresse fields.organizer raccourcie
       price: Number(fields.price) / 1_000_000_000,
       attendees: fields.minted_count,
@@ -157,8 +157,12 @@ export default function Home() {
                 <GlassCard hoverEffect gradient className="h-full flex flex-col group">
                   <div className="relative h-48 w-full overflow-hidden">
                     <div className="absolute inset-0 bg-gradient-to-t from-background to-transparent z-10" />
-                    {/* Placeholder généré aléatoirement avec CSS pour varier si pas d'image */}
-                    <div className={`w-full h-full bg-gradient-to-br ${event!.category === 'Competition' ? 'from-amber-600/20 to-purple-900/40' : 'from-cyan-600/20 to-blue-900/40'}`}></div>
+                    {/* Affichage de l'image de couverture ou gradient de fallback */}
+                    {event!.image && !event!.image.includes('placeholder') ? (
+                      <img src={event!.image} alt={event!.title} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className={`w-full h-full bg-gradient-to-br ${event!.category === 'Competition' ? 'from-amber-600/20 to-purple-900/40' : 'from-cyan-600/20 to-blue-900/40'}`}></div>
+                    )}
                     
                     <Badge className={`absolute top-3 left-3 z-20 backdrop-blur-md border-white/10 text-white hover:bg-background/60 ${
                         event!.category === 'Competition' ? 'bg-amber-500/20 text-amber-300 border-amber-500/30' : 'bg-background/50'

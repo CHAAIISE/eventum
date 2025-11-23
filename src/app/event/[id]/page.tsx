@@ -52,7 +52,7 @@ export default function EventPage({ params }: { params: Promise<{ id: string }> 
     spotsTotal: Number(fields?.max_supply || 0),
     spotsTaken: Number(fields?.minted_count || 0),
     organizer: fields?.organizer || "Anonymous",
-    image: "/placeholder.svg?height=600&width=1200&text=Event+Cover", // Idéalement stocké dans IPFS/Url
+    image: fields?.asset_urls && fields.asset_urls.length > 0 ? fields.asset_urls[0] : "/placeholder.svg?height=600&width=1200&text=Event+Cover",
     hasPrizePool: fields?.prize_distribution?.length > 0,
     // Calcul approx du prize pool actuel (balance)
     currentBalance: fields?.balance || 0,

@@ -248,6 +248,9 @@ module eventum::eventum {
 
         let ticket_uid = object::new(ctx);
         
+        // Récupérer l'URL de l'image originale (asset_urls[0] = ticket image)
+        let ticket_image_url = *vector::borrow(&event.asset_urls, 0);
+        
         let ticket = Ticket {
             id: ticket_uid,
             event_id: object::id(event),
@@ -255,7 +258,7 @@ module eventum::eventum {
             description: string::utf8(b"Ticket Kiosk - Non Verifie"),
             status: 0,
             rank: 0,
-            url: string::utf8(b"https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=KioskTicket"),
+            url: ticket_image_url,
         };
 
         kiosk::place(kiosk, kiosk_cap, ticket);

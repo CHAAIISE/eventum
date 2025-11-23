@@ -67,7 +67,6 @@ export default function MyEventsPage() {
       console.warn('⚠️ [MyEvents] Event not found for ticket:', fields.event_id);
     }
 
-<<<<<<< HEAD
     return {
       id: ticket.objectId,
       eventId: fields.event_id,
@@ -81,12 +80,6 @@ export default function MyEventsPage() {
       eventExists: eventExists
     }
   }).filter((t: any) => t !== null)
-=======
-  // On récupère les IDs réels des objets (le nom du dynamic field dans un Kiosk = ID de l'objet)
-  const realTicketIds: string[] = (kioskFields?.data ?? [])
-    .map((f: any) => String(f?.name?.value ?? ""))
-    .filter((id: string) => id.length > 0)
->>>>>>> refs/remotes/origin/main
 
   console.log('🎫 [MyEvents] Formatted tickets:', tickets);
   console.log('🎫 [MyEvents] First formatted ticket:', tickets[0]);
@@ -98,35 +91,9 @@ export default function MyEventsPage() {
   // Past = Status 2 (Certified)
   const pastEvents = tickets.filter((t: any) => t.status === 2)
 
-<<<<<<< HEAD
   console.log('🎫 [MyEvents] upcomingEvents:', upcomingEvents.length);
   console.log('🎫 [MyEvents] activeEvents:', activeEvents.length);
   console.log('🎫 [MyEvents] pastEvents:', pastEvents.length);
-=======
-  // --- FILTRAGE DES TICKETS (Active vs Past) ---
-  const tickets = ticketsData?.map((obj) => {
-    const fields = (obj.data?.content as any)?.fields
-    if (!fields) return null
-    // On vérifie si c'est bien un ticket de notre module (pour éviter d'afficher d'autres NFTs du Kiosk)
-    if (!obj.data?.type?.includes(MODULE_NAME)) return null
-
-    return {
-      id: obj.data?.objectId, // ID unique de l'objet
-      eventId: fields.event_id,
-      title: fields.title,
-      description: fields.description,
-      status: fields.status, // 0=Minted, 1=CheckedIn, 2=Certified
-      rank: fields.rank, // 1=Gold, 2=Silver, 3=Bronze
-      url: fields.url, // L'image dynamique
-      ticketIdDisplay: obj.data?.objectId.slice(0, 6).toUpperCase()
-    }
-  }).filter(t => t !== null) || []
-
-  // Active = Status 0 (To Check-in) OU Status 1 (To Claim)
-  const activeEvents = tickets.filter(t => t!.status === 0 || t!.status === 1)
-  // Past = Status 2 (Finished/Certified)
-  const pastEvents = tickets.filter(t => t!.status === 2)
->>>>>>> refs/remotes/origin/main
 
   // --- ACTIONS BLOCKCHAIN ---
   const handleCheckIn = (ticket: any) => {
