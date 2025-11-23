@@ -8,30 +8,22 @@ import { GlassCard } from "@/components/ui/glass-card"
 import { Calendar, MapPin, Search, ArrowRight, Loader2, Users } from "lucide-react"
 
 // --- SUI IMPORTS ---
-import { useSuiClientQuery } from "@mysten/dapp-kit"
-import { FEATURED_EVENTS } from "@/lib/contracts" // Assure-toi que ce fichier existe avec tes IDs !
+import { useAllEvents } from "@/features/events/useAllEvents";
 
 export default function Home() {
-  // 1. Récupération des événements On-Chain
-  // On utilise "multiGetObjects" pour charger tous les IDs définis dans FEATURED_EVENTS en un seul appel réseau
-  const { data: suiData, isPending, error } = useSuiClientQuery(
-    "multiGetObjects",
-    {
-      ids: FEATURED_EVENTS,
-      options: { showContent: true },
-    }
-  )
+  // 1. Récupération de TOUS les événements créés via EventCreated
+  const { events: suiData, isLoading: isPending, error } = useAllEvents()
 
   // 2. Transformation des données (Parsing)
   const events = suiData?.map((obj) => {
     // Sécurité : si l'objet n'existe pas ou erreur
-    if (!obj.data || !obj.data.content) return null
+    if (!obj || !obj.content) return null
     
     // Casting des champs Move
-    const fields = (obj.data.content as any).fields
+    const fields = (obj.content as any).fields
 
     return {
-      id: obj.data.objectId,
+      id: obj.objectId,
       title: fields.title || "Untitled Event",
       // Le contrat actuel stocke la date en string, parfait
       date: fields.date || "TBA", 
@@ -155,7 +147,6 @@ export default function Home() {
           {!isPending && events.length === 0 && (
             <div className="text-center py-20">
               <p className="text-muted-foreground text-lg">No featured events found.</p>
-              <p className="text-sm text-muted-foreground/50">Add IDs to src/lib/contracts.ts</p>
             </div>
           )}
 

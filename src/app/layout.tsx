@@ -3,7 +3,6 @@ import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
 import { Navbar } from "@/components/navbar"
-// On n'importe plus EnokiProvider ici, mais le Wrapper global
 import { Providers } from "@/components/providers" 
 
 import "./globals.css"

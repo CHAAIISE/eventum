@@ -42,13 +42,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useSignAndExecuteTransaction, useCurrentAccount, useSuiClientQuery } from "@mysten/dapp-kit"
 import { Transaction } from "@mysten/sui/transactions"
 import { useToast } from "@/hooks/use-toast"
-import { PACKAGE_ID, MODULE_NAME } from "@/lib/contracts"
+import { PACKAGE_ID, MODULE_NAME, PUBLISHER_ID } from "@/lib/contracts"
+import { useMyEvents } from "@/features/events/useMyEvents"
 
 export default function ManagePage() {
   const [view, setView] = useState<"create" | "dashboard">("dashboard")
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const currentAccount = useCurrentAccount()
   const { toast } = useToast()
+  const { events: myEventsData, isLoading: isLoadingMyEvents } = useMyEvents()
   const [isProcessing, setIsProcessing] = useState(false)
 
   // --- FORM STATES ---
@@ -94,48 +96,13 @@ export default function ManagePage() {
   )
 
   // --- DATA FETCHING (SUI) ---
+  // Utilisation du hook useMyEvents qui filtre les événements par organisateur
 
-  // 1. Récupérer les OrganizerCap
-  const { data: capsData, isPending: isLoadingCaps, refetch: refetchCaps } = useSuiClientQuery(
-    "getOwnedObjects",
-    {
-      owner: currentAccount?.address || "",
-      filter: { StructType: `${PACKAGE_ID}::${MODULE_NAME}::OrganizerCap` },
-      options: { showContent: true },
-    },
-    { enabled: !!currentAccount && view === "dashboard" }
-  )
-
-  // 2. Récupérer le Publisher Object (Nécessaire pour create_event dans la nouvelle version)
-  // Note: Cela suppose que l'utilisateur connecté EST le propriétaire du package (celui qui a déployé)
-  const { data: publisherData } = useSuiClientQuery(
-    "getOwnedObjects",
-    {
-      owner: currentAccount?.address || "",
-      filter: { StructType: "0x2::package::Publisher" },
-    },
-    { enabled: !!currentAccount && view === "create" }
-  )
-
-  // 3. Extraire les Event IDs
-  const organizedEventIds = capsData?.data.map((cap) => {
-    const fields = (cap.data?.content as any)?.fields
-    return fields?.event_id
-  }) || []
-
-  // 4. Récupérer les Events
-  const { data: eventsData, isPending: isLoadingEvents, refetch: refetchEvents } = useSuiClientQuery(
-    "multiGetObjects",
-    {
-      ids: organizedEventIds,
-      options: { showContent: true },
-    },
-    { enabled: organizedEventIds.length > 0 }
-  )
-
-  // 5. Transformer les données pour l'UI
-  const myEvents = eventsData?.map((obj) => {
-    const fields = (obj.data?.content as any)?.fields
+  // Transformer les données pour l'UI
+  const myEvents = myEventsData?.map((obj) => {
+    if (!obj) return null;
+    
+    const fields = (obj.content as any)?.fields
     if (!fields) return null
     
     const isEnded = fields.event_ended
@@ -147,7 +114,7 @@ export default function ManagePage() {
     else if (isActive) uiStatus = "Active"
 
     return {
-        id: obj.data?.objectId,
+        id: obj.objectId,
         title: fields.title,
         date: fields.date,
         attendees: Number(fields.minted_count),
@@ -157,8 +124,7 @@ export default function ManagePage() {
         balance: fields.balance,
         checkinEnabled: fields.checkin_enabled,
         ended: fields.event_ended,
-        // On retrouve le Cap ID pour pouvoir agir sur l'event
-        capId: capsData?.data.find(c => (c.data?.content as any)?.fields?.event_id === obj.data?.objectId)?.data?.objectId
+        capId: undefined // Pas besoin de capId avec useMyEvents
     }
   }).filter(e => e !== null) || []
 
@@ -174,16 +140,6 @@ export default function ManagePage() {
     // 1. Vérifications initiales
     if (!currentAccount) {
         return toast({ title: "Connect Wallet", variant: "destructive" })
-    }
-    
-    // On vérifie qu'on est le publisher (deployer)
-    const publisherObj = publisherData?.data?.find(obj => true)
-    if (!publisherObj) {
-        return toast({ 
-            title: "Publisher Object Missing", 
-            description: "You must be the contract deployer to create events.", 
-            variant: "destructive" 
-        })
     }
 
     // On vérifie que les assets IA sont générés
@@ -226,7 +182,7 @@ export default function ManagePage() {
       tx.moveCall({
         target: `${PACKAGE_ID}::${MODULE_NAME}::create_event`,
         arguments: [
-          tx.object(publisherObj.data?.objectId!), // Arg 1: Publisher
+          tx.object(PUBLISHER_ID), // Arg 1: Shared Publisher
           tx.pure.string(createTitle),
           tx.pure.string(createDescription || "No description"),
           tx.pure.string(`${createDate} ${createTime}`),
@@ -244,7 +200,7 @@ export default function ManagePage() {
           toast({ title: "Event Created!", description: "Redirecting to dashboard..." })
           setTimeout(() => {
              setView("dashboard")
-             refetchCaps()
+             // Les événements seront automatiquement rafraîchis
           }, 1000)
         },
         onError: (error) => toast({ title: "Error", description: error.message, variant: "destructive" }),
@@ -266,7 +222,7 @@ export default function ManagePage() {
     signAndExecute({ transaction: tx }, {
         onSuccess: () => {
             toast({ title: `Check-in ${enabled ? 'Enabled' : 'Disabled'}` })
-            refetchEvents()
+            // Les événements seront automatiquement rafraîchis
             setIsProcessing(false)
         },
         onError: (e) => { toast({ title: "Error", description: e.message, variant: "destructive" }); setIsProcessing(false) }
@@ -326,7 +282,7 @@ export default function ManagePage() {
         onSuccess: () => {
             toast({ title: "Prizes Distributed & Event Ended" })
             setShowDistributeModal(false)
-            refetchEvents()
+            // Les événements seront automatiquement rafraîchis
             setIsProcessing(false)
         },
         onError: (e) => { toast({ title: "Error", description: e.message, variant: "destructive" }); setIsProcessing(false) }
@@ -393,9 +349,84 @@ export default function ManagePage() {
                   )}
                    <div className="space-y-2"><Label className="text-white">Cover Image</Label><Input placeholder="URL" value={createCoverUrl} onChange={(e) => setCreateCoverUrl(e.target.value)} className="bg-white/5 text-white border-white/10"/></div>
                 </div>
+                {/* --- DEBUT DU BLOC MANQUANT : AI ASSET FACTORY --- */}
+                <div className="space-y-2 pt-6 border-t border-white/10">
+                    <Label className="text-white flex items-center gap-2">
+                        <ImageIcon className="h-4 w-4 text-cyan-400"/> AI Asset Factory (Required)
+                    </Label>
+                    
+                    <div className="bg-white/5 p-4 rounded-lg border border-white/10">
+                        <p className="text-xs text-muted-foreground mb-4">
+                            Before launching, you must generate the 5 NFT variations (Ticket, Badge, Gold, Silver, Bronze).
+                            This uses Replicate & Walrus.
+                        </p>
 
-                <Button onClick={handleCreateEventOnChain} className="w-full h-14 text-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold">
-                  <Rocket className="mr-2 h-5 w-5" /> Launch Event On-Chain
+                        <Button
+                            type="button" // IMPORTANT : type="button" pour ne pas soumettre le formulaire
+                            onClick={async () => {
+                                setGenerateError(null)
+                                if (!createTitle) return setGenerateError("Please enter an event title first")
+                                if (!createCoverUrl) return setGenerateError("Please enter a cover URL first")
+                                
+                                try {
+                                    setGenerating(true)
+                                    const payload = { eventTitle: createTitle, coverImageUrl: createCoverUrl }
+                                    
+                                    // Appel à ton API route.ts
+                                    const res = await fetch("/api/generate-assets", { 
+                                        method: "POST", 
+                                        body: JSON.stringify(payload) 
+                                    })
+                                    const data = await res.json()
+                                    
+                                    if(data.images) {
+                                        setGeneratedImages(data.images)
+                                        toast({ title: "Assets Generated!", description: "Stored on Walrus Testnet." })
+                                    } else {
+                                        setGenerateError("Generation failed. Check console.")
+                                    }
+                                } catch(e) { 
+                                    console.error(e)
+                                    setGenerateError("Error calling API")
+                                } finally { 
+                                    setGenerating(false) 
+                                }
+                            }}
+                            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white border-0"
+                            disabled={generating || !createTitle || !createCoverUrl}
+                        >
+                            {generating ? (
+                                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating...</>
+                            ) : (
+                                <><Camera className="mr-2 h-4 w-4" /> 1. Generate NFT Assets</>
+                            )}
+                        </Button>
+
+                        {generateError && <p className="text-red-400 text-xs mt-2 font-mono">{generateError}</p>}
+
+                        {/* PREVIEW DES IMAGES GENERÉES */}
+                        {generatedImages && (
+                            <div className="grid grid-cols-5 gap-2 mt-4 animate-in fade-in">
+                                {Object.entries(generatedImages).map(([key, url]) => (
+                                    <div key={key} className="text-center group">
+                                        <div className="relative h-16 w-16 mx-auto overflow-hidden rounded border border-white/20">
+                                            <img src={url} className="h-full w-full object-cover bg-black/50" alt={key} />
+                                        </div>
+                                        <span className="text-[10px] text-muted-foreground capitalize mt-1 block">{key}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                <Button 
+                    onClick={handleCreateEventOnChain}
+                    disabled={!generatedImages || generating}
+                    className="w-full h-14 text-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold mt-6 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Rocket className="mr-2 h-5 w-5" /> 
+                  {!generatedImages ? "2. Launch Locked (Generate first)" : "2. Launch Event On-Chain"}
                 </Button>
               </form>
             </GlassCard>
@@ -409,7 +440,7 @@ export default function ManagePage() {
               {/* LEFT: List of Events */}
               <div className="lg:col-span-4 space-y-4">
                 <h2 className="text-xl font-bold text-white mb-4">Your Events</h2>
-                {isLoadingEvents ? (
+                {isLoadingMyEvents ? (
                      <div className="flex justify-center py-10"><Loader2 className="animate-spin text-cyan-400"/></div>
                 ) : filteredEvents.length === 0 ? (
                   <div className="text-center py-12 bg-white/5 rounded-xl border border-white/10 border-dashed">
