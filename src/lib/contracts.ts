@@ -3,7 +3,7 @@
 // export const EVENT_ID = process.env.NEXT_PUBLIC_EVENT_ID;
 export const PACKAGE_ID = "0x159d139f5e374aabbed91004c137b5d11c439d25ad77b8111a403dc28386cdc8";
 export const REGISTRY_ID = "0xdf81469054115d57296a0aa730fb1bab8cba6324b2861dae24ee735a7ad29690";
-export const PUBLISHER_ID = "0x1b1f3908d11f448f3b18971987d68842c3ed2521d55e8b9aa81f3d09e09e20d8";
+export const PUBLISHER_ID = "0xe8bf69923d2c71c0e69b3eda3714eef85d7b8388d1826354f0142a4f142e4b99"; // SHARED Publisher
 export const MODULE_NAME = "eventum";
 export const EVENT_TYPE = `${PACKAGE_ID}::${MODULE_NAME}::Event`;
 export const TICKET_TYPE = `${PACKAGE_ID}::${MODULE_NAME}::Ticket`;
