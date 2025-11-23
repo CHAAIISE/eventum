@@ -3,7 +3,9 @@ import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import { Analytics } from "@vercel/analytics/next"
 import { Navbar } from "@/components/navbar"
-import { EnokiProvider } from "@/app/enoki/EnokiProvider"
+// On n'importe plus EnokiProvider ici, mais le Wrapper global
+import { Providers } from "@/components/providers" 
+
 import "./globals.css"
 import "@mysten/dapp-kit/dist/index.css"
 
@@ -32,11 +34,12 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased min-h-screen bg-background selection:bg-cyan-500/30`}
       >
-        <EnokiProvider>
+        {/* Un seul Provider qui gère tout */}
+        <Providers>
           <Navbar />
           <main className="pt-16 min-h-screen">{children}</main>
           <Analytics />
-        </EnokiProvider>
+        </Providers>
       </body>
     </html>
   )
