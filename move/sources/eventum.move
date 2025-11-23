@@ -279,7 +279,26 @@ module eventum::eventum {
         
         ticket_mut.status = 1;
         ticket_mut.description = string::utf8(b"Participant Verified");
-        ticket_mut.url = string::utf8(b"https://img.icons8.com/fluency/96/checked-user-male.png");
+        ticket_mut.url = *vector::borrow(&event.asset_urls, 1);
+    }
+
+    // Version démo sans whitelist - pour hackathon/tests
+    public entry fun self_checkin_demo(
+        event: &Event,
+        kiosk: &mut Kiosk,
+        kiosk_cap: &KioskOwnerCap,
+        ticket_id: ID,
+        _ctx: &mut TxContext
+    ) {
+        assert!(event.checkin_enabled, ECheckinNotEnabled);
+        // Pas de vérification de whitelist pour la démo
+        let ticket_mut = kiosk::borrow_mut<Ticket>(kiosk, kiosk_cap, ticket_id);
+        assert!(ticket_mut.event_id == object::id(event), EWrongEvent);
+        assert!(ticket_mut.status == 0, EAlreadyScanned);
+        
+        ticket_mut.status = 1;
+        ticket_mut.description = string::utf8(b"Participant Verified");
+        ticket_mut.url = *vector::borrow(&event.asset_urls, 1);
     }
 
     public entry fun toggle_checkin(

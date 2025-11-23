@@ -23,6 +23,7 @@ export default function MyEventsPage() {
   const [activeTab, setActiveTab] = useState<TabType>("upcoming")
   const [showQRModal, setShowQRModal] = useState(false)
   const [qrPayload, setQrPayload] = useState<string | null>(null)
+  const [qrGeneratedFor, setQrGeneratedFor] = useState<string | null>(null) // Track which ticket generated QR
 
   // Sui Hooks
   const account = useCurrentAccount()
@@ -96,6 +97,49 @@ export default function MyEventsPage() {
   console.log('🎫 [MyEvents] pastEvents:', pastEvents.length);
 
   // --- ACTIONS BLOCKCHAIN ---
+  const handleUpgradeNFT = (ticket: any) => {
+    if (!kioskId || !kioskCapId) {
+      toast({ title: "Error", description: "Kiosk not found", variant: "destructive" })
+      return
+    }
+
+    setIsProcessing(true)
+    const tx = new Transaction()
+    
+    // Utiliser self_checkin_demo qui ne nécessite pas de whitelist
+    // Simule que le QR a été scanné et validé
+    tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::self_checkin_demo`,
+        arguments: [
+            tx.object(ticket.eventId),
+            tx.object(kioskId),
+            tx.object(kioskCapId),
+            tx.pure.id(ticket.id)
+        ]
+    })
+
+    signAndExecute({ transaction: tx }, {
+      onSuccess: () => {
+        toast({ 
+          title: "NFT Upgraded!", 
+          description: "Your ticket has been upgraded to Participant Badge (Status 1)" 
+        })
+        refreshData()
+        setIsProcessing(false)
+        setQrGeneratedFor(null) // Reset QR tracking
+      },
+      onError: (err) => {
+        console.error(err)
+        toast({ 
+          title: "Upgrade Failed", 
+          description: err.message || "Make sure check-in is enabled", 
+          variant: "destructive" 
+        })
+        setIsProcessing(false)
+      }
+    })
+  }
+
   const handleCheckIn = (ticket: any) => {
     if (!kioskId || !kioskCapId) {
       toast({ title: "Error", description: "Kiosk not found", variant: "destructive" })
@@ -269,18 +313,47 @@ export default function MyEventsPage() {
                       </div>
 
                       {/* Bouton QR Code */}
-                      <Button 
-                        onClick={() => {
-                          setQrPayload(`${ticket.id}|${ticket.eventId}`);
-                          setShowQRModal(true);
-                        }}
-                        variant="outline"
-                        className="w-full"
-                        disabled={!ticket.eventExists}
-                      >
-                        <QrCode className="h-4 w-4 mr-2" />
-                        {ticket.eventExists ? 'Generate QR Code for Check-in' : 'QR Code Unavailable (Buy New Ticket)'}
-                      </Button>
+                      <div className="space-y-2">
+                        <Button 
+                          onClick={() => {
+                            setQrPayload(`${ticket.id}|${ticket.eventId}`);
+                            setQrGeneratedFor(ticket.id);
+                            setShowQRModal(true);
+                          }}
+                          variant="outline"
+                          className="w-full"
+                          disabled={!ticket.eventExists}
+                        >
+                          <QrCode className="h-4 w-4 mr-2" />
+                          {ticket.eventExists ? 'Generate QR Code for Check-in' : 'QR Code Unavailable (Buy New Ticket)'}
+                        </Button>
+
+                        {/* Bouton Upgrade NFT - activé après génération du QR */}
+                        <Button
+                          onClick={() => handleUpgradeNFT(ticket)}
+                          variant="default"
+                          className="w-full bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500"
+                          disabled={!ticket.eventExists || qrGeneratedFor !== ticket.id || isProcessing}
+                        >
+                          {isProcessing ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Upgrading...
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle2 className="h-4 w-4 mr-2" />
+                              Upgrade my NFT
+                            </>
+                          )}
+                        </Button>
+
+                        {qrGeneratedFor !== ticket.id && ticket.eventExists && (
+                          <p className="text-xs text-muted-foreground text-center">
+                            Generate QR Code first to unlock NFT upgrade
+                          </p>
+                        )}
+                      </div>
                       
                       {!ticket.eventExists && (
                         <p className="text-xs text-muted-foreground mt-2">
