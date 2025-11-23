@@ -119,10 +119,10 @@ module eventum::eventum {
             total_percent = total_percent + *vector::borrow(&prize_distribution, i);
             i = i + 1;
         };
-        assert!(total_percent <= 100, EInvalidDistribution);
+        assert!(total_percent == 100 || total_percent == 0, EInvalidDistribution);
         assert!(royalty_percentage <= 100, EInvalidPercentage);
 
-        // --- 👇 INITIALISATION POLICY (Ton code implémenté) ---
+        // --- INITIALISATION POLICY  ---
         
         // 1. Création de la Policy DÉDIÉE à cet événement
         let (mut policy, policy_cap) = transfer_policy::new<Ticket>(publisher, ctx);
@@ -183,6 +183,27 @@ module eventum::eventum {
 
         transfer::share_object(event);
         transfer::public_transfer(cap, tx_context::sender(ctx));
+    }
+
+    public entry fun add_to_whitelist(
+        cap: &OrganizerCap,
+        event: &mut Event,
+        ticket_ids: vector<ID>,
+        _ctx: &mut TxContext
+    ) {
+        assert!(object::id(event) == cap.event_id, ENotOrganizer);
+
+        let len = vector::length(&ticket_ids);
+        let mut i = 0;
+        
+        while (i < len) {
+            let ticket_id = *vector::borrow(&ticket_ids, i);
+            // On autorise ce ticket à faire son check-in
+            if (!table::contains(&event.checkin_whitelist, ticket_id)) {
+                table::add(&mut event.checkin_whitelist, ticket_id, true);
+            };
+            i = i + 1;
+        }
     }
 
     public entry fun buy_ticket_into_kiosk(
