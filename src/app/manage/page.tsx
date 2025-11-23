@@ -43,12 +43,14 @@ import { useSignAndExecuteTransaction, useCurrentAccount, useSuiClientQuery } fr
 import { Transaction } from "@mysten/sui/transactions"
 import { useToast } from "@/hooks/use-toast"
 import { PACKAGE_ID, MODULE_NAME, PUBLISHER_ID } from "@/lib/contracts"
+import { useMyEvents } from "@/features/events/useMyEvents"
 
 export default function ManagePage() {
   const [view, setView] = useState<"create" | "dashboard">("dashboard")
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const currentAccount = useCurrentAccount()
   const { toast } = useToast()
+  const { events: myEventsData, isLoading: isLoadingMyEvents } = useMyEvents()
   const [isProcessing, setIsProcessing] = useState(false)
 
   // --- FORM STATES ---
@@ -94,37 +96,13 @@ export default function ManagePage() {
   )
 
   // --- DATA FETCHING (SUI) ---
+  // Utilisation du hook useMyEvents qui filtre les événements par organisateur
 
-  // 1. Récupérer les OrganizerCap
-  const { data: capsData, isPending: isLoadingCaps, refetch: refetchCaps } = useSuiClientQuery(
-    "getOwnedObjects",
-    {
-      owner: currentAccount?.address || "",
-      filter: { StructType: `${PACKAGE_ID}::${MODULE_NAME}::OrganizerCap` },
-      options: { showContent: true },
-    },
-    { enabled: !!currentAccount && view === "dashboard" }
-  )
-
-  // 2. Extraire les Event IDs
-  const organizedEventIds = capsData?.data.map((cap) => {
-    const fields = (cap.data?.content as any)?.fields
-    return fields?.event_id
-  }) || []
-
-  // 4. Récupérer les Events
-  const { data: eventsData, isPending: isLoadingEvents, refetch: refetchEvents } = useSuiClientQuery(
-    "multiGetObjects",
-    {
-      ids: organizedEventIds,
-      options: { showContent: true },
-    },
-    { enabled: organizedEventIds.length > 0 }
-  )
-
-  // 5. Transformer les données pour l'UI
-  const myEvents = eventsData?.map((obj) => {
-    const fields = (obj.data?.content as any)?.fields
+  // Transformer les données pour l'UI
+  const myEvents = myEventsData?.map((obj) => {
+    if (!obj) return null;
+    
+    const fields = (obj.content as any)?.fields
     if (!fields) return null
     
     const isEnded = fields.event_ended
@@ -136,7 +114,7 @@ export default function ManagePage() {
     else if (isActive) uiStatus = "Active"
 
     return {
-        id: obj.data?.objectId,
+        id: obj.objectId,
         title: fields.title,
         date: fields.date,
         attendees: Number(fields.minted_count),
@@ -146,8 +124,7 @@ export default function ManagePage() {
         balance: fields.balance,
         checkinEnabled: fields.checkin_enabled,
         ended: fields.event_ended,
-        // On retrouve le Cap ID pour pouvoir agir sur l'event
-        capId: capsData?.data.find(c => (c.data?.content as any)?.fields?.event_id === obj.data?.objectId)?.data?.objectId
+        capId: undefined // Pas besoin de capId avec useMyEvents
     }
   }).filter(e => e !== null) || []
 
@@ -223,7 +200,7 @@ export default function ManagePage() {
           toast({ title: "Event Created!", description: "Redirecting to dashboard..." })
           setTimeout(() => {
              setView("dashboard")
-             refetchCaps()
+             // Les événements seront automatiquement rafraîchis
           }, 1000)
         },
         onError: (error) => toast({ title: "Error", description: error.message, variant: "destructive" }),
@@ -245,7 +222,7 @@ export default function ManagePage() {
     signAndExecute({ transaction: tx }, {
         onSuccess: () => {
             toast({ title: `Check-in ${enabled ? 'Enabled' : 'Disabled'}` })
-            refetchEvents()
+            // Les événements seront automatiquement rafraîchis
             setIsProcessing(false)
         },
         onError: (e) => { toast({ title: "Error", description: e.message, variant: "destructive" }); setIsProcessing(false) }
@@ -305,7 +282,7 @@ export default function ManagePage() {
         onSuccess: () => {
             toast({ title: "Prizes Distributed & Event Ended" })
             setShowDistributeModal(false)
-            refetchEvents()
+            // Les événements seront automatiquement rafraîchis
             setIsProcessing(false)
         },
         onError: (e) => { toast({ title: "Error", description: e.message, variant: "destructive" }); setIsProcessing(false) }
@@ -463,7 +440,7 @@ export default function ManagePage() {
               {/* LEFT: List of Events */}
               <div className="lg:col-span-4 space-y-4">
                 <h2 className="text-xl font-bold text-white mb-4">Your Events</h2>
-                {isLoadingEvents ? (
+                {isLoadingMyEvents ? (
                      <div className="flex justify-center py-10"><Loader2 className="animate-spin text-cyan-400"/></div>
                 ) : filteredEvents.length === 0 ? (
                   <div className="text-center py-12 bg-white/5 rounded-xl border border-white/10 border-dashed">
