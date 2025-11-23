@@ -62,6 +62,7 @@ module eventum::eventum {
         checkin_whitelist: Table<ID, bool>,
         transfer_policy_id: ID,
         transfer_policy_cap_id: ID,
+        asset_urls: vector<String>,
     }
 
     public struct Ticket has key, store {
@@ -102,9 +103,7 @@ module eventum::eventum {
 
     // --- CREATION EVENT ---
     public entry fun create_event(
-        // Il faut le Publisher pour créer une Policy
         publisher: &package::Publisher, 
-        
         title: vector<u8>,
         description: vector<u8>,
         date: vector<u8>,
@@ -113,6 +112,7 @@ module eventum::eventum {
         royalty_percentage: u16,
         prize_distribution: vector<u64>,
         is_competition: bool,
+        asset_urls_bytes: vector<vector<u8>>, 
         ctx: &mut TxContext
     ) {
         let mut i = 0;
@@ -125,12 +125,9 @@ module eventum::eventum {
         assert!(total_percent <= 100, EInvalidDistribution);
         assert!(royalty_percentage <= 100, EInvalidPercentage);
 
-        // --- INITIALISATION POLICY  ---
-        
-        // 1. Création de la Policy DÉDIÉE à cet événement
+        // 1. Création Policy
         let (mut policy, policy_cap) = transfer_policy::new<Ticket>(publisher, ctx);
 
-        // 2. Configuration immédiate des Royalties
         if (price > 0 && royalty_percentage > 0) {
             custom_royalty_rule::add(
                 &mut policy,
@@ -140,18 +137,23 @@ module eventum::eventum {
             );
         };
 
-        // 3. Récupération des IDs pour les stocker dans l'Event
         let policy_id = object::id(&policy);
         let cap_id = object::id(&policy_cap);
 
-        // 4. Partage et Transfert
-        // La Policy est publique (tout le monde doit pouvoir la lire)
         transfer::public_share_object(policy);
-        // Le Cap est privé (seul l'organisateur peut changer les règles)
         transfer::public_transfer(policy_cap, tx_context::sender(ctx));
 
-        // --- FIN INITIALISATION POLICY ---
+        // 2. Conversion des URLs (vector<u8> -> String)
+        let mut string_urls = vector::empty<String>();
+        let url_len = vector::length(&asset_urls_bytes);
+        let mut j = 0;
+        while (j < url_len) {
+            let url_bytes = *vector::borrow(&asset_urls_bytes, j);
+            vector::push_back(&mut string_urls, string::utf8(url_bytes));
+            j = j + 1;
+        };
 
+        // 3. Création de l'Event
         let event_uid = object::new(ctx);
         let event_id = object::uid_to_inner(&event_uid);
 
@@ -176,7 +178,8 @@ module eventum::eventum {
             is_competition: is_competition,
             checkin_whitelist: table::new(ctx),
             transfer_policy_id: policy_id,
-            transfer_policy_cap_id: cap_id
+            transfer_policy_cap_id: cap_id,
+            asset_urls: string_urls
         };
 
         let cap = OrganizerCap {
@@ -354,6 +357,11 @@ module eventum::eventum {
         assert!(ticket_mut.status >= 1, ENotCheckedIn);
         assert!(ticket_mut.status == 1, EAlreadyCertified);
 
+        let url_badge = *vector::borrow(&event.asset_urls, 1);
+        let url_gold = *vector::borrow(&event.asset_urls, 2);
+        let url_silver = *vector::borrow(&event.asset_urls, 3);
+        let url_bronze = *vector::borrow(&event.asset_urls, 4);
+
         ticket_mut.status = 2; 
         
         if (event.is_competition && table::contains(&event.winner_ranks, ticket_id)) {
@@ -362,21 +370,21 @@ module eventum::eventum {
             
             if (rank == 1) {
                 ticket_mut.description = string::utf8(b"Rank #1 - Gold Medal");
-                ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/1st-place-medal-emoji.png");
+                ticket_mut.url = url_gold;
             } else if (rank == 2) {
                 ticket_mut.description = string::utf8(b"Rank #2 - Silver Medal");
-                ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/2nd-place-medal-emoji.png");
+                ticket_mut.url = url_silver;
             } else if (rank == 3) {
                 ticket_mut.description = string::utf8(b"Rank #3 - Bronze Medal");
-                ticket_mut.url = string::utf8(b"https://img.icons8.com/emoji/96/3rd-place-medal-emoji.png");
+                ticket_mut.url = url_bronze;
             } else {
                 ticket_mut.description = string::utf8(b"Finisher - Ranked");
-                ticket_mut.url = string::utf8(b"https://img.icons8.com/fluency/96/trophy.png");
+                ticket_mut.url = url_badge;
             };
         } else {
             ticket_mut.rank = 0;
             ticket_mut.description = string::utf8(b"Participation Certified");
-            ticket_mut.url = string::utf8(b"https://img.icons8.com/color/96/certificate.png");
+            ticket_mut.url = url_badge;
         };
 
         if (table::contains(&event.pending_prizes, ticket_id)) {
