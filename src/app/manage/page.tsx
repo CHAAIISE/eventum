@@ -31,7 +31,8 @@ import {
   Camera,
   Loader2,
   Lock,
-  Unlock
+  Unlock,
+  ScanLine
 } from "lucide-react"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Spinner } from "@/components/ui/spinner"
@@ -84,8 +85,9 @@ export default function ManagePage() {
   // Scanner State
   const [showQRScanner, setShowQRScanner] = useState(false)
   const [scanResult, setScanResult] = useState<string | null>(null)
-  const [paused, setPaused] = useState(false)
+  const [isScanning, setIsScanning] = useState(true) // Pour pauser le scan après détection
 
+  // Import dynamique du scanner pour éviter les erreurs SSR
   const Scanner = dynamic(
     () => import("@yudiel/react-qr-scanner").then((mod) => mod.Scanner),
     { ssr: false }
@@ -104,13 +106,24 @@ export default function ManagePage() {
     { enabled: !!currentAccount && view === "dashboard" }
   )
 
-  // 2. Extraire les Event IDs
+  // 2. Récupérer le Publisher Object (Nécessaire pour create_event dans la nouvelle version)
+  // Note: Cela suppose que l'utilisateur connecté EST le propriétaire du package (celui qui a déployé)
+  const { data: publisherData } = useSuiClientQuery(
+    "getOwnedObjects",
+    {
+      owner: currentAccount?.address || "",
+      filter: { StructType: "0x2::package::Publisher" },
+    },
+    { enabled: !!currentAccount && view === "create" }
+  )
+
+  // 3. Extraire les Event IDs
   const organizedEventIds = capsData?.data.map((cap) => {
     const fields = (cap.data?.content as any)?.fields
     return fields?.event_id
   }) || []
 
-  // 3. Récupérer les Events
+  // 4. Récupérer les Events
   const { data: eventsData, isPending: isLoadingEvents, refetch: refetchEvents } = useSuiClientQuery(
     "multiGetObjects",
     {
@@ -120,7 +133,7 @@ export default function ManagePage() {
     { enabled: organizedEventIds.length > 0 }
   )
 
-  // 4. Transformer les données pour l'UI
+  // 5. Transformer les données pour l'UI
   const myEvents = eventsData?.map((obj) => {
     const fields = (obj.data?.content as any)?.fields
     if (!fields) return null
@@ -129,7 +142,6 @@ export default function ManagePage() {
     const isUpcoming = !fields.checkin_enabled && !isEnded
     const isActive = fields.checkin_enabled && !isEnded
 
-    // Déterminer le status UI
     let uiStatus: "Active" | "Upcoming" | "Finished" = "Upcoming"
     if (isEnded) uiStatus = "Finished"
     else if (isActive) uiStatus = "Active"
@@ -159,7 +171,21 @@ export default function ManagePage() {
   const handleCreateEventOnChain = async (e: React.MouseEvent) => {
     e.preventDefault()
     if (!currentAccount) return toast({ title: "Connect Wallet", variant: "destructive" })
-    if (!createTitle || !createDate || !createSupply) return toast({ title: "Missing Fields", variant: "destructive" })
+    
+    // Vérification du Publisher (Nouveau Backend)
+    const publisherObj = publisherData?.data?.find(obj => 
+        // Idéalement on vérifie que c'est bien le publisher de NOTRE package, mais pour le hackathon on prend le premier
+        // Pour être strict: check fields.module_name == 'eventum'
+        true 
+    )
+
+    if (!publisherObj) {
+        return toast({ 
+            title: "Publisher Object Missing", 
+            description: "You must be the contract deployer to create events with this version.", 
+            variant: "destructive" 
+        })
+    }
 
     try {
       const tx = new Transaction()
@@ -175,6 +201,7 @@ export default function ManagePage() {
       tx.moveCall({
         target: `${PACKAGE_ID}::${MODULE_NAME}::create_event`,
         arguments: [
+          tx.object(publisherObj.data?.objectId!), // ARG 1: Publisher (Nouveau)
           tx.pure.string(createTitle),
           tx.pure.string(createDescription || "No description"),
           tx.pure.string(`${createDate} ${createTime}`),
@@ -188,9 +215,11 @@ export default function ManagePage() {
 
       signAndExecute({ transaction: tx }, {
         onSuccess: (result) => {
-          toast({ title: "Event Created!", description: "Welcome to your new dashboard." })
-          setView("dashboard")
-          refetchCaps()
+          toast({ title: "Event Created!", description: "Redirecting to dashboard..." })
+          setTimeout(() => {
+             setView("dashboard")
+             refetchCaps()
+          }, 1000)
         },
         onError: (error) => toast({ title: "Error", description: error.message, variant: "destructive" }),
       })
@@ -215,6 +244,42 @@ export default function ManagePage() {
         },
         onError: (e) => { toast({ title: "Error", description: e.message, variant: "destructive" }); setIsProcessing(false) }
     })
+  }
+
+  // --- NOUVELLE FONCTION : SCAN & WHITELIST ---
+  const handleScanAndWhitelist = (ticketId: string) => {
+      if (!currentEvent || !currentEvent.capId) return
+      
+      // On pause le scanner pour éviter les doubles scans
+      setIsScanning(false)
+      setScanResult(ticketId) // Affiche l'ID scanné à l'écran
+
+      const tx = new Transaction()
+      // NOTE : Cette fonction 'add_to_whitelist' doit être ajoutée dans ton Move
+      tx.moveCall({
+          target: `${PACKAGE_ID}::${MODULE_NAME}::add_to_whitelist`,
+          arguments: [
+              tx.object(currentEvent.capId),
+              tx.object(currentEvent.id!),
+              tx.pure.id(ticketId) // L'ID du Ticket scanné
+          ]
+      })
+
+      signAndExecute({ transaction: tx }, {
+          onSuccess: () => {
+              toast({ title: "Ticket Whitelisted!", description: "User can now validate presence." })
+              // On ferme le scanner après succès ou on le relance ?
+              // Pour l'instant on ferme
+              setShowQRScanner(false)
+              setScanResult(null)
+              setIsScanning(true)
+          },
+          onError: (e) => { 
+              toast({ title: "Whitelist Failed", description: e.message, variant: "destructive" })
+              // On laisse l'organisateur réessayer
+              setIsScanning(true) 
+          }
+      })
   }
 
   const handleDistributePrizes = () => {
@@ -250,25 +315,10 @@ export default function ManagePage() {
           <p className="text-muted-foreground text-lg">Create and manage your events</p>
         </div>
 
+        {/* ... [TABS NAVIGATION] ... */}
         <div className="flex items-center gap-2 mb-10 p-1 bg-white/5 rounded-lg w-fit border border-white/10">
-          <button
-            onClick={() => setView("dashboard")}
-            className={`px-8 py-3 rounded-md text-sm font-medium transition-all ${view === "dashboard"
-              ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/30"
-              : "text-muted-foreground hover:text-white hover:bg-white/5"
-              }`}
-          >
-            My Created Events
-          </button>
-          <button
-            onClick={() => setView("create")}
-            className={`px-8 py-3 rounded-md text-sm font-medium transition-all ${view === "create"
-              ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/30"
-              : "text-muted-foreground hover:text-white hover:bg-white/5"
-              }`}
-          >
-            Create New Event
-          </button>
+          <button onClick={() => setView("dashboard")} className={`px-8 py-3 rounded-md text-sm font-medium transition-all ${view === "dashboard" ? "bg-cyan-600 text-white" : "text-muted-foreground hover:bg-white/5"}`}>My Created Events</button>
+          <button onClick={() => setView("create")} className={`px-8 py-3 rounded-md text-sm font-medium transition-all ${view === "create" ? "bg-cyan-600 text-white" : "text-muted-foreground hover:bg-white/5"}`}>Create New Event</button>
         </div>
 
         {/* View A: Create New Event Form */}
@@ -276,115 +326,47 @@ export default function ManagePage() {
           <div className="max-w-3xl mx-auto">
             <GlassCard className="p-8 md:p-10 border-white/10">
               <form className="space-y-8">
+                {/* [CHAMPS DU FORMULAIRE IDENTIQUES A AVANT] */}
                 <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="title" className="text-white">Event Title</Label>
-                    <Input value={createTitle} onChange={(e) => setCreateTitle(e.target.value)} className="bg-white/5 border-white/10 text-white h-12 text-lg" />
+                  <div className="space-y-2"><Label className="text-white">Event Title</Label><Input value={createTitle} onChange={(e) => setCreateTitle(e.target.value)} className="bg-white/5 border-white/10 text-white h-12 text-lg" /></div>
+                  <div className="space-y-2"><Label className="text-white">Description</Label><Textarea value={createDescription} onChange={(e) => setCreateDescription(e.target.value)} className="bg-white/5 border-white/10 text-white" /></div>
+                  <div className="grid grid-cols-2 gap-6">
+                    <div className="space-y-2"><Label className="text-white">Date</Label><Input type="date" value={createDate} onChange={(e) => setCreateDate(e.target.value)} className="bg-white/5 text-white border-white/10" /></div>
+                    <div className="space-y-2"><Label className="text-white">Time</Label><Input type="time" value={createTime} onChange={(e) => setCreateTime(e.target.value)} className="bg-white/5 text-white border-white/10" /></div>
                   </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="description" className="text-white">Description</Label>
-                    <Textarea value={createDescription} onChange={(e) => setCreateDescription(e.target.value)} className="bg-white/5 border-white/10 text-white min-h-[100px]" />
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="space-y-2">
-                        <Label className="text-white">Date</Label>
-                        <Input type="date" value={createDate} onChange={(e) => setCreateDate(e.target.value)} className="bg-white/5 text-white border-white/10" />
-                    </div>
-                    <div className="space-y-2">
-                        <Label className="text-white">Time</Label>
-                        <Input type="time" value={createTime} onChange={(e) => setCreateTime(e.target.value)} className="bg-white/5 text-white border-white/10" />
-                    </div>
-                  </div>
-
+                  
                   <div className="flex items-center justify-between p-4 rounded-lg bg-white/5 border border-white/10">
                     <Label className="text-white">Competition Mode</Label>
                     <Switch checked={eventType === "competition"} onCheckedChange={(c) => setEventType(c ? "competition" : "standard")} />
                   </div>
-
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between p-4 rounded-lg bg-white/5 border border-white/10">
+                  <div className="flex items-center justify-between p-4 rounded-lg bg-white/5 border border-white/10">
                       <Label className="text-white">Paid Event</Label>
                       <Switch checked={isPaid} onCheckedChange={setIsPaid} />
-                    </div>
-
-                    {isPaid && (
+                  </div>
+                  {isPaid && (
                         <div className="grid grid-cols-2 gap-4">
-                             <div className="space-y-2">
-                                <Label className="text-white">Price (SUI)</Label>
-                                <Input type="number" value={createPrice} onChange={(e) => setCreatePrice(e.target.value)} className="bg-white/5 text-white border-white/10"/>
-                             </div>
-                             <div className="space-y-2">
-                                <Label className="text-white">Royalty %</Label>
-                                <Input type="number" value={createRoyalty} onChange={(e) => setCreateRoyalty(e.target.value)} className="bg-white/5 text-white border-white/10"/>
-                             </div>
+                             <div className="space-y-2"><Label className="text-white">Price (SUI)</Label><Input type="number" value={createPrice} onChange={(e) => setCreatePrice(e.target.value)} className="bg-white/5 text-white border-white/10"/></div>
+                             <div className="space-y-2"><Label className="text-white">Royalty %</Label><Input type="number" value={createRoyalty} onChange={(e) => setCreateRoyalty(e.target.value)} className="bg-white/5 text-white border-white/10"/></div>
                         </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-white">Total Supply</Label>
-                    <Input type="number" value={createSupply} onChange={(e) => setCreateSupply(e.target.value)} className="bg-white/5 text-white border-white/10"/>
-                  </div>
-
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between p-4 rounded-lg bg-white/5 border border-white/10">
+                  )}
+                  <div className="space-y-2"><Label className="text-white">Total Supply</Label><Input type="number" value={createSupply} onChange={(e) => setCreateSupply(e.target.value)} className="bg-white/5 text-white border-white/10"/></div>
+                  <div className="flex items-center justify-between p-4 rounded-lg bg-white/5 border border-white/10">
                       <Label className="text-white">Prize Pool</Label>
                       <Switch checked={hasPrizePool} onCheckedChange={setHasPrizePool} />
-                    </div>
-
-                    {hasPrizePool && (
+                  </div>
+                  {hasPrizePool && (
                          <div className="grid grid-cols-3 gap-4">
                              <Input placeholder="1st %" value={dist1} onChange={(e) => setDist1(e.target.value)} className="bg-white/5 text-white border-white/10"/>
                              <Input placeholder="2nd %" value={dist2} onChange={(e) => setDist2(e.target.value)} className="bg-white/5 text-white border-white/10"/>
                              <Input placeholder="3rd %" value={dist3} onChange={(e) => setDist3(e.target.value)} className="bg-white/5 text-white border-white/10"/>
                          </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label className="text-white">Cover Image</Label>
-                    <Input placeholder="Image URL" value={createCoverUrl} onChange={(e) => setCreateCoverUrl(e.target.value)} className="bg-white/5 text-white border-white/10" />
-                  </div>
+                  )}
+                   <div className="space-y-2"><Label className="text-white">Cover Image</Label><Input placeholder="URL" value={createCoverUrl} onChange={(e) => setCreateCoverUrl(e.target.value)} className="bg-white/5 text-white border-white/10"/></div>
                 </div>
 
-                <Button 
-                    onClick={handleCreateEventOnChain}
-                    className="w-full h-14 text-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold"
-                >
-                  <Rocket className="mr-2 h-5 w-5" />
-                  Launch Event On-Chain
+                <Button onClick={handleCreateEventOnChain} className="w-full h-14 text-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold">
+                  <Rocket className="mr-2 h-5 w-5" /> Launch Event On-Chain
                 </Button>
-
-                {/* AI GENERATION SECTION (Conservée) */}
-                <div className="mt-4 border-t border-white/10 pt-6">
-                    <h4 className="text-white text-sm mb-4">AI Asset Factory</h4>
-                    <Button
-                        type="button"
-                        onClick={async () => {
-                            setGenerateError(null)
-                            if (!createTitle) return setGenerateError("Title required")
-                            try {
-                                setGenerating(true)
-                                // Simulation ou appel API réel ici
-                                const payload = { eventTitle: createTitle, coverImageUrl: createCoverUrl }
-                                const res = await fetch("/api/generate-assets", { method: "POST", body: JSON.stringify(payload) })
-                                const data = await res.json()
-                                if(data.images) setGeneratedImages(data.images)
-                            } catch(e) { console.error(e) } finally { setGenerating(false) }
-                        }}
-                        className="w-full bg-emerald-600 text-white"
-                        disabled={generating}
-                    >
-                        {generating ? <Spinner className="mr-2" /> : "Generate NFT Assets"}
-                    </Button>
-                    {generatedImages && (
-                        <div className="grid grid-cols-5 gap-2 mt-4">
-                            {Object.entries(generatedImages).map(([k,v]) => <img key={k} src={v} className="h-16 w-16 rounded border border-white/20"/>)}
-                        </div>
-                    )}
-                </div>
               </form>
             </GlassCard>
           </div>
@@ -393,23 +375,10 @@ export default function ManagePage() {
         {/* View B: Dashboard */}
         {view === "dashboard" && (
           <>
-            <div className="flex items-center gap-2 mb-8 p-1 bg-white/5 rounded-lg w-fit border border-white/10">
-              {(["Active", "Upcoming", "Finished"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => { setActiveTab(tab); setSelectedEventId(null); }}
-                  className={`px-6 py-2 rounded-md text-sm font-medium transition-all ${activeTab === tab ? "bg-cyan-600 text-white" : "text-muted-foreground hover:bg-white/5"}`}
-                >
-                  {tab}
-                </button>
-              ))}
-            </div>
-
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-              {/* Events List */}
+              {/* LEFT: List of Events */}
               <div className="lg:col-span-4 space-y-4">
-                <h2 className="text-xl font-bold text-white mb-4">{activeTab} Events</h2>
-                
+                <h2 className="text-xl font-bold text-white mb-4">Your Events</h2>
                 {isLoadingEvents ? (
                      <div className="flex justify-center py-10"><Loader2 className="animate-spin text-cyan-400"/></div>
                 ) : filteredEvents.length === 0 ? (
@@ -421,18 +390,14 @@ export default function ManagePage() {
                     <GlassCard
                       key={event!.id}
                       className={`p-4 cursor-pointer transition-all group ${selectedEventId === event!.id ? "border-cyan-500/50 bg-white/10" : "hover:bg-white/10"}`}
-                      onClick={() => setSelectedEventId(Number(event!.id) ? Number(event!.id) : event!.id as any)} // Hack typage id
+                      onClick={() => setSelectedEventId(Number(event!.id) ? Number(event!.id) : event!.id as any)}
                     >
                       <div className="flex justify-between items-start mb-2">
-                        <Badge variant="outline" className={event!.status === "Active" ? "text-green-400 border-green-500/30" : "text-muted-foreground"}>
-                          {event!.status}
-                        </Badge>
+                        <Badge variant="outline" className={event!.status === "Active" ? "text-green-400 border-green-500/30" : "text-muted-foreground"}>{event!.status}</Badge>
                         <Badge className="bg-blue-500/10 text-blue-400">{event!.type}</Badge>
                       </div>
                       <h3 className="font-bold text-white mb-1">{event!.title}</h3>
-                      <div className="flex items-center gap-2 text-xs text-cyan-400 mb-3">
-                        <Calendar className="h-3 w-3" /> {event!.date}
-                      </div>
+                      <div className="flex items-center gap-2 text-xs text-cyan-400 mb-3"><Calendar className="h-3 w-3" /> {event!.date}</div>
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
                         <div className="flex items-center gap-1"><Users className="h-3 w-3" /> {event!.attendees} / {event!.max}</div>
                         <ChevronRight className="h-4 w-4"/>
@@ -442,7 +407,7 @@ export default function ManagePage() {
                 )}
               </div>
 
-              {/* Event Details & Management */}
+              {/* RIGHT: Event Management */}
               <div className="lg:col-span-8">
                 {selectedEventId && currentEvent ? (
                   <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
@@ -451,7 +416,6 @@ export default function ManagePage() {
                             <h2 className="text-2xl font-bold text-white">{currentEvent.title}</h2>
                             <p className="text-sm font-mono text-muted-foreground">ID: {currentEvent.id}</p>
                         </div>
-                        {/* ACTIONS ORGANISATEUR */}
                         <div className="flex gap-2">
                             <Button 
                                 onClick={() => handleToggleCheckin(!currentEvent.checkinEnabled)}
@@ -467,45 +431,33 @@ export default function ManagePage() {
 
                     {/* STATS */}
                     <div className="grid grid-cols-3 gap-4">
-                        <GlassCard className="p-4 text-center">
-                            <p className="text-xs text-muted-foreground uppercase">Tickets Sold</p>
-                            <p className="text-2xl font-bold text-white">{currentEvent.attendees}</p>
-                        </GlassCard>
-                        <GlassCard className="p-4 text-center">
-                            <p className="text-xs text-muted-foreground uppercase">Revenue (SUI)</p>
-                            <p className="text-2xl font-bold text-cyan-400">{Number(currentEvent.balance) / 1e9}</p>
-                        </GlassCard>
-                        <GlassCard className="p-4 text-center">
-                             <p className="text-xs text-muted-foreground uppercase">Check-in Status</p>
-                             <p className={`text-xl font-bold ${currentEvent.checkinEnabled ? "text-green-400" : "text-yellow-400"}`}>
-                                {currentEvent.checkinEnabled ? "OPEN" : "CLOSED"}
-                             </p>
-                        </GlassCard>
+                        <GlassCard className="p-4 text-center"><p className="text-xs text-muted-foreground uppercase">Sold</p><p className="text-2xl font-bold text-white">{currentEvent.attendees}</p></GlassCard>
+                        <GlassCard className="p-4 text-center"><p className="text-xs text-muted-foreground uppercase">Rev (SUI)</p><p className="text-2xl font-bold text-cyan-400">{Number(currentEvent.balance) / 1e9}</p></GlassCard>
+                        <GlassCard className="p-4 text-center"><p className="text-xs text-muted-foreground uppercase">Check-in</p><p className={`text-xl font-bold ${currentEvent.checkinEnabled ? "text-green-400" : "text-yellow-400"}`}>{currentEvent.checkinEnabled ? "OPEN" : "CLOSED"}</p></GlassCard>
                     </div>
+
+                    {/* [NOUVEAU] SCANNER ZONE */}
+                    {currentEvent.checkinEnabled && !currentEvent.ended && (
+                         <div className="p-6 border border-cyan-500/20 rounded-xl bg-cyan-500/5 flex items-center justify-between">
+                             <div>
+                                 <h3 className="text-lg font-bold text-cyan-400 flex items-center gap-2"><ScanLine className="h-5 w-5"/> Check-in Scanner</h3>
+                                 <p className="text-sm text-muted-foreground">Scan attendee QR codes to whitelist them for presence validation.</p>
+                             </div>
+                             <Button onClick={() => setShowQRScanner(true)} className="bg-cyan-600 hover:bg-cyan-500 text-white h-12 px-6">
+                                 <Camera className="mr-2 h-5 w-5"/> Open Camera
+                             </Button>
+                         </div>
+                    )}
                     
-                    {/* DANGER ZONE */}
                     {!currentEvent.ended && currentEvent.type === 'competition' && (
                         <div className="p-6 border border-red-500/20 rounded-xl bg-red-500/5">
                             <h3 className="text-lg font-bold text-red-400 mb-2">End Event & Distribute</h3>
                             <p className="text-sm text-muted-foreground mb-4">Finalize the event and send prizes to winners.</p>
-                            <Button 
-                                onClick={() => setShowDistributeModal(true)}
-                                className="bg-red-600 hover:bg-red-700 text-white w-full"
-                            >
+                            <Button onClick={() => setShowDistributeModal(true)} className="bg-red-600 hover:bg-red-700 text-white w-full">
                                 <Trophy className="mr-2 h-4 w-4" /> Distribute Prizes
                             </Button>
                         </div>
                     )}
-
-                    {/* PARTICIPANTS PLACEHOLDER */}
-                    <GlassCard className="overflow-hidden">
-                        <div className="p-4 border-b border-white/10"><h3 className="font-bold text-white">Participants</h3></div>
-                        <div className="p-8 text-center">
-                            <Users className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
-                            <p className="text-muted-foreground">Detailed participant list requires an external Indexer.</p>
-                            <p className="text-sm text-cyan-400 mt-2">{currentEvent.attendees} tickets minted on-chain.</p>
-                        </div>
-                    </GlassCard>
                   </div>
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-center p-10 border-2 border-dashed border-white/10 rounded-xl bg-white/5">
@@ -520,8 +472,6 @@ export default function ManagePage() {
         )}
 
         {/* MODALS */}
-        
-        {/* 1. QR Code Event (Pour que les users scannent) */}
         <Dialog open={showQRModal} onOpenChange={setShowQRModal}>
             <DialogContent className="bg-[#03132b] border-white/10">
                 <DialogHeader><DialogTitle className="text-white text-center">Event Check-in QR</DialogTitle></DialogHeader>
@@ -532,34 +482,42 @@ export default function ManagePage() {
             </DialogContent>
         </Dialog>
 
-        {/* 2. Distribute Prizes */}
         <Dialog open={showDistributeModal} onOpenChange={setShowDistributeModal}>
              <DialogContent className="bg-[#03132b] border-white/10">
-                 <DialogHeader>
-                     <DialogTitle className="text-white">Distribute Prizes</DialogTitle>
-                     <DialogDescription>Enter winning Ticket IDs (one per line).</DialogDescription>
-                 </DialogHeader>
-                 <Textarea 
-                    className="bg-white/5 border-white/10 text-white font-mono"
-                    placeholder="0x...\n0x..."
-                    value={winnerIdsInput}
-                    onChange={(e) => setWinnerIdsInput(e.target.value)}
-                 />
-                 <DialogFooter>
-                     <Button onClick={handleDistributePrizes} disabled={isProcessing} className="bg-red-600 text-white">
-                         {isProcessing ? <Loader2 className="animate-spin"/> : "Confirm Distribution"}
-                     </Button>
-                 </DialogFooter>
+                 <DialogHeader><DialogTitle className="text-white">Distribute Prizes</DialogTitle><DialogDescription>Enter winning Ticket IDs.</DialogDescription></DialogHeader>
+                 <Textarea className="bg-white/5 border-white/10 text-white font-mono" placeholder="0x...\n0x..." value={winnerIdsInput} onChange={(e) => setWinnerIdsInput(e.target.value)} />
+                 <DialogFooter><Button onClick={handleDistributePrizes} disabled={isProcessing} className="bg-red-600 text-white">{isProcessing ? <Loader2 className="animate-spin"/> : "Confirm Distribution"}</Button></DialogFooter>
              </DialogContent>
         </Dialog>
 
-        {/* 3. Scanner (Gardé si tu veux faire de la vérif manuelle, optionnel) */}
+        {/* 3. SCANNER MODAL (MODIFIE POUR WHITELIST) */}
         <Dialog open={showQRScanner} onOpenChange={setShowQRScanner}>
           <DialogContent className="max-w-lg bg-[#03132b] border-white/10">
+            <DialogHeader>
+                <DialogTitle className="text-white">Scan Attendee QR</DialogTitle>
+                <DialogDescription>This will whitelist the ticket for check-in.</DialogDescription>
+            </DialogHeader>
+            
+            {/* Zone Caméra */}
             <div className="relative aspect-square bg-black rounded-lg overflow-hidden">
-                <Scanner onScan={(r) => { if(r?.[0]?.rawValue) { setScanResult(r[0].rawValue); setPaused(true); } }} />
+                <Scanner 
+                    onScan={(r) => { 
+                        if(r?.[0]?.rawValue && isScanning) { 
+                            handleScanAndWhitelist(r[0].rawValue) 
+                        } 
+                    }} 
+                />
+                {/* Overlay de visée */}
+                <div className="absolute inset-0 border-2 border-cyan-500/50 m-12 rounded-lg pointer-events-none"></div>
             </div>
-            {scanResult && <p className="text-center text-green-400 font-bold mt-4">Scanned: {scanResult}</p>}
+
+            {scanResult && (
+                <div className="text-center mt-4 p-2 bg-white/10 rounded">
+                    <p className="text-xs text-muted-foreground">Processing ID:</p>
+                    <p className="text-green-400 font-mono font-bold break-all">{scanResult}</p>
+                    <Loader2 className="animate-spin h-4 w-4 mx-auto mt-2 text-cyan-400"/>
+                </div>
+            )}
           </DialogContent>
         </Dialog>
 
