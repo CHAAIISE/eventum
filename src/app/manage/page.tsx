@@ -393,9 +393,84 @@ export default function ManagePage() {
                   )}
                    <div className="space-y-2"><Label className="text-white">Cover Image</Label><Input placeholder="URL" value={createCoverUrl} onChange={(e) => setCreateCoverUrl(e.target.value)} className="bg-white/5 text-white border-white/10"/></div>
                 </div>
+                {/* --- DEBUT DU BLOC MANQUANT : AI ASSET FACTORY --- */}
+                <div className="space-y-2 pt-6 border-t border-white/10">
+                    <Label className="text-white flex items-center gap-2">
+                        <ImageIcon className="h-4 w-4 text-cyan-400"/> AI Asset Factory (Required)
+                    </Label>
+                    
+                    <div className="bg-white/5 p-4 rounded-lg border border-white/10">
+                        <p className="text-xs text-muted-foreground mb-4">
+                            Before launching, you must generate the 5 NFT variations (Ticket, Badge, Gold, Silver, Bronze).
+                            This uses Replicate & Walrus.
+                        </p>
 
-                <Button onClick={handleCreateEventOnChain} className="w-full h-14 text-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold">
-                  <Rocket className="mr-2 h-5 w-5" /> Launch Event On-Chain
+                        <Button
+                            type="button" // IMPORTANT : type="button" pour ne pas soumettre le formulaire
+                            onClick={async () => {
+                                setGenerateError(null)
+                                if (!createTitle) return setGenerateError("Please enter an event title first")
+                                if (!createCoverUrl) return setGenerateError("Please enter a cover URL first")
+                                
+                                try {
+                                    setGenerating(true)
+                                    const payload = { eventTitle: createTitle, coverImageUrl: createCoverUrl }
+                                    
+                                    // Appel à ton API route.ts
+                                    const res = await fetch("/api/generate-assets", { 
+                                        method: "POST", 
+                                        body: JSON.stringify(payload) 
+                                    })
+                                    const data = await res.json()
+                                    
+                                    if(data.images) {
+                                        setGeneratedImages(data.images)
+                                        toast({ title: "Assets Generated!", description: "Stored on Walrus Testnet." })
+                                    } else {
+                                        setGenerateError("Generation failed. Check console.")
+                                    }
+                                } catch(e) { 
+                                    console.error(e)
+                                    setGenerateError("Error calling API")
+                                } finally { 
+                                    setGenerating(false) 
+                                }
+                            }}
+                            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white border-0"
+                            disabled={generating || !createTitle || !createCoverUrl}
+                        >
+                            {generating ? (
+                                <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Generating & Uploading to Walrus...</>
+                            ) : (
+                                <><Camera className="mr-2 h-4 w-4" /> 1. Generate NFT Assets</>
+                            )}
+                        </Button>
+
+                        {generateError && <p className="text-red-400 text-xs mt-2 font-mono">{generateError}</p>}
+
+                        {/* PREVIEW DES IMAGES GENERÉES */}
+                        {generatedImages && (
+                            <div className="grid grid-cols-5 gap-2 mt-4 animate-in fade-in">
+                                {Object.entries(generatedImages).map(([key, url]) => (
+                                    <div key={key} className="text-center group">
+                                        <div className="relative h-16 w-16 mx-auto overflow-hidden rounded border border-white/20">
+                                            <img src={url} className="h-full w-full object-cover bg-black/50" alt={key} />
+                                        </div>
+                                        <span className="text-[10px] text-muted-foreground capitalize mt-1 block">{key}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                <Button 
+                    onClick={handleCreateEventOnChain}
+                    disabled={!generatedImages || generating}
+                    className="w-full h-14 text-lg bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-bold mt-6 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Rocket className="mr-2 h-5 w-5" /> 
+                  {!generatedImages ? "2. Launch Locked (Generate first)" : "2. Launch Event On-Chain"}
                 </Button>
               </form>
             </GlassCard>
