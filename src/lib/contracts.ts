@@ -10,7 +10,6 @@ export const TICKET_TYPE = `${PACKAGE_ID}::${MODULE_NAME}::Ticket`;
 // Ajoute les IDs des events que tu as créés via la page "Manage"
 // À chaque fois que tu crées un event pour la démo, copie son ID ici.
 export const FEATURED_EVENTS = [
-  "0x...id_event_1...", 
-  "0x...id_event_2...",
-  "0x...id_event_3..."
+  "0xd93b7916d2b419a4913aee6d128912362cb17776c57e5232d17b9bf4e2158c52", 
+  
 ];
