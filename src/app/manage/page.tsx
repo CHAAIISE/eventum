@@ -170,27 +170,42 @@ export default function ManagePage() {
 
   const handleCreateEventOnChain = async (e: React.MouseEvent) => {
     e.preventDefault()
-    if (!currentAccount) return toast({ title: "Connect Wallet", variant: "destructive" })
     
-    // Vérification du Publisher (Nouveau Backend)
-    const publisherObj = publisherData?.data?.find(obj => 
-        // Idéalement on vérifie que c'est bien le publisher de NOTRE package, mais pour le hackathon on prend le premier
-        // Pour être strict: check fields.module_name == 'eventum'
-        true 
-    )
-
+    // 1. Vérifications initiales
+    if (!currentAccount) {
+        return toast({ title: "Connect Wallet", variant: "destructive" })
+    }
+    
+    // On vérifie qu'on est le publisher (deployer)
+    const publisherObj = publisherData?.data?.find(obj => true)
     if (!publisherObj) {
         return toast({ 
             title: "Publisher Object Missing", 
-            description: "You must be the contract deployer to create events with this version.", 
+            description: "You must be the contract deployer to create events.", 
             variant: "destructive" 
         })
     }
 
+    // On vérifie que les assets IA sont générés
+    if (!generatedImages) {
+        return toast({
+            title: "Assets Missing",
+            description: "Please generate AI assets first (Ticket, Medals...).",
+            variant: "destructive"
+        })
+    }
+
+    if (!createTitle || !createDate || !createSupply) {
+        return toast({ title: "Missing Fields", variant: "destructive" })
+    }
+
     try {
       const tx = new Transaction()
+      
+      // Conversion Prix
       const priceInMist = isPaid && createPrice ? parseFloat(createPrice) * 1_000_000_000 : 0
       
+      // Distribution Prix
       const distribution = []
       if (hasPrizePool) {
         if (dist1) distribution.push(Number(dist1))
@@ -198,10 +213,20 @@ export default function ManagePage() {
         if (dist3) distribution.push(Number(dist3))
       }
 
+      // Construction du vecteur d'URLs (Ordre strict pour le Smart Contract)
+      // 0: Ticket, 1: Badge, 2: Gold, 3: Silver, 4: Bronze
+      const assetUrls = [
+          generatedImages.ticket,  
+          generatedImages.attended, 
+          generatedImages.gold,     
+          generatedImages.silver,   
+          generatedImages.bronze    
+      ]
+
       tx.moveCall({
         target: `${PACKAGE_ID}::${MODULE_NAME}::create_event`,
         arguments: [
-          tx.object(publisherObj.data?.objectId!), // ARG 1: Publisher (Nouveau)
+          tx.object(publisherObj.data?.objectId!), // Arg 1: Publisher
           tx.pure.string(createTitle),
           tx.pure.string(createDescription || "No description"),
           tx.pure.string(`${createDate} ${createTime}`),
@@ -210,6 +235,7 @@ export default function ManagePage() {
           tx.pure.u16(isPaid && createRoyalty ? Number(createRoyalty) : 0),
           tx.pure.vector('u64', distribution),
           tx.pure.bool(eventType === "competition"),
+          tx.pure.vector('string', assetUrls) // Arg 10: Les URLs IA
         ],
       })
 
@@ -225,6 +251,7 @@ export default function ManagePage() {
       })
     } catch (err) {
       console.error(err)
+      toast({ title: "Transaction Failed", description: String(err), variant: "destructive" })
     }
   }
 
@@ -246,38 +273,41 @@ export default function ManagePage() {
     })
   }
 
-  // --- NOUVELLE FONCTION : SCAN & WHITELIST ---
   const handleScanAndWhitelist = (ticketId: string) => {
       if (!currentEvent || !currentEvent.capId) return
       
-      // On pause le scanner pour éviter les doubles scans
+      // Pause le scanner
       setIsScanning(false)
-      setScanResult(ticketId) // Affiche l'ID scanné à l'écran
+      setScanResult(ticketId)
 
       const tx = new Transaction()
-      // NOTE : Cette fonction 'add_to_whitelist' doit être ajoutée dans ton Move
+      
+      // CORRECTION ICI : Le backend attend vector<ID>, donc on envoie un tableau
       tx.moveCall({
           target: `${PACKAGE_ID}::${MODULE_NAME}::add_to_whitelist`,
           arguments: [
               tx.object(currentEvent.capId),
               tx.object(currentEvent.id!),
-              tx.pure.id(ticketId) // L'ID du Ticket scanné
+              // On encapsule l'ID unique dans un vecteur (liste de 1 élément)
+              // Note : En Move/Sui SDK, les IDs sont passés comme des 'address' dans les vecteurs
+              tx.pure.vector('address', [ticketId]) 
           ]
       })
 
       signAndExecute({ transaction: tx }, {
           onSuccess: () => {
               toast({ title: "Ticket Whitelisted!", description: "User can now validate presence." })
-              // On ferme le scanner après succès ou on le relance ?
-              // Pour l'instant on ferme
-              setShowQRScanner(false)
-              setScanResult(null)
-              setIsScanning(true)
+              // On garde le scanner fermé pour laisser le temps de voir le succès, 
+              // ou on peut le rouvrir automatiquement après un délai.
+              // Ici on le laisse fermé et on reset le scanResult au bout de 2s si on veut réactiver :
+              setTimeout(() => {
+                  setScanResult(null)
+                  setIsScanning(true) // Prêt pour le suivant
+              }, 2000)
           },
           onError: (e) => { 
               toast({ title: "Whitelist Failed", description: e.message, variant: "destructive" })
-              // On laisse l'organisateur réessayer
-              setIsScanning(true) 
+              setIsScanning(true) // On réactive tout de suite en cas d'erreur
           }
       })
   }
