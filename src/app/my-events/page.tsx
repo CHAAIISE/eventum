@@ -14,7 +14,7 @@ import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-ki
 import { Transaction } from "@mysten/sui/transactions"
 import { PACKAGE_ID, MODULE_NAME } from "@/lib/contracts"
 
-import { useTicketGenerator } from "@/features/ticket-qr/useTicketGenerator"
+//import { useTicketGenerator } from "@/features/ticket-qr/useTicketGenerator"
 import { useMyTicketsAndEvents } from "./useMyTickets"
 
 type TabType = "upcoming" | "active" | "past"
