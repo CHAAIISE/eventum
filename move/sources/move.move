@@ -9,11 +9,9 @@ module eventum::eventum {
     use std::string::{Self, String};
     use std::vector;
     use sui::kiosk::{Self, Kiosk, KioskOwnerCap};
-    use sui::transfer_policy::{Self, TransferPolicy, TransferPolicyCap}; // Policy gardé pour init mais pas utilisé dans claim
+    use sui::transfer_policy::{Self, TransferPolicy, TransferPolicyCap}; 
     use sui::table::{Self, Table};
     use eventum::custom_royalty_rule;
-    
-
 
     // --- CONSTANTES D'ERREUR ---
     const EWrongAmount: u64 = 0;
@@ -30,6 +28,7 @@ module eventum::eventum {
     const EAlreadyCertified: u64 = 11;
     const ESoldOut: u64 = 12;
     const EInvalidPercentage: u64 = 13;
+    const ENotWhitelisted: u64 = 14;
 
     public struct EVENTUM has drop {}
 
@@ -57,6 +56,9 @@ module eventum::eventum {
         winner_ranks: Table<ID, u64>,
         pending_prizes: Table<ID, u64>,
         is_competition: bool,
+        checkin_whitelist: Table<ID, bool>,
+        transfer_policy_id: ID,
+        transfer_policy_cap_id: ID,
     }
 
     public struct Ticket has key, store {
@@ -90,16 +92,16 @@ module eventum::eventum {
 
         display::update_version(&mut display);
         
-        let (policy, policy_cap) = transfer_policy::new<Ticket>(&publisher, ctx);
-
-        transfer::public_share_object(policy);
+        
         transfer::public_transfer(publisher, tx_context::sender(ctx));
         transfer::public_transfer(display, tx_context::sender(ctx));
-        transfer::public_transfer(policy_cap, tx_context::sender(ctx));
     }
 
     // --- CREATION EVENT ---
     public entry fun create_event(
+        // Il faut le Publisher pour créer une Policy
+        publisher: &package::Publisher, 
+        
         title: vector<u8>,
         description: vector<u8>,
         date: vector<u8>,
@@ -119,6 +121,33 @@ module eventum::eventum {
         };
         assert!(total_percent <= 100, EInvalidDistribution);
         assert!(royalty_percentage <= 100, EInvalidPercentage);
+
+        // --- 👇 INITIALISATION POLICY (Ton code implémenté) ---
+        
+        // 1. Création de la Policy DÉDIÉE à cet événement
+        let (mut policy, policy_cap) = transfer_policy::new<Ticket>(publisher, ctx);
+
+        // 2. Configuration immédiate des Royalties
+        if (price > 0 && royalty_percentage > 0) {
+            custom_royalty_rule::add(
+                &mut policy,
+                &policy_cap,
+                royalty_percentage * 100,
+                0
+            );
+        };
+
+        // 3. Récupération des IDs pour les stocker dans l'Event
+        let policy_id = object::id(&policy);
+        let cap_id = object::id(&policy_cap);
+
+        // 4. Partage et Transfert
+        // La Policy est publique (tout le monde doit pouvoir la lire)
+        transfer::public_share_object(policy);
+        // Le Cap est privé (seul l'organisateur peut changer les règles)
+        transfer::public_transfer(policy_cap, tx_context::sender(ctx));
+
+        // --- FIN INITIALISATION POLICY ---
 
         let event_uid = object::new(ctx);
         let event_id = object::uid_to_inner(&event_uid);
@@ -141,7 +170,10 @@ module eventum::eventum {
             event_ended: false,
             winner_ranks: table::new(ctx),
             pending_prizes: table::new(ctx),
-            is_competition: is_competition
+            is_competition: is_competition,
+            checkin_whitelist: table::new(ctx),
+            transfer_policy_id: policy_id,
+            transfer_policy_cap_id: cap_id
         };
 
         let cap = OrganizerCap {
@@ -175,7 +207,6 @@ module eventum::eventum {
         };
 
         let ticket_uid = object::new(ctx);
-        // Note: On n'ajoute plus rien dans 'ticket_owners' car ça n'existe plus
         
         let ticket = Ticket {
             id: ticket_uid,
@@ -198,6 +229,7 @@ module eventum::eventum {
         _ctx: &mut TxContext
     ) {
         assert!(event.checkin_enabled, ECheckinNotEnabled);
+        assert!(table::contains(&event.checkin_whitelist, ticket_id), ENotWhitelisted);
         let ticket_mut = kiosk::borrow_mut<Ticket>(kiosk, kiosk_cap, ticket_id);
         assert!(ticket_mut.event_id == object::id(event), EWrongEvent);
         assert!(ticket_mut.status == 0, EAlreadyScanned);
@@ -217,8 +249,6 @@ module eventum::eventum {
         event.checkin_enabled = enabled;
     }
 
-    // --- DISTRIBUTION DES PRIX : CALCULER ET STOCKER (Pull Pattern) ---
-    // Ne transfère plus d'argent, remplit juste la table pending_prizes
     public entry fun distribute_prizes(
         cap: &OrganizerCap,
         event: &mut Event,
@@ -238,11 +268,9 @@ module eventum::eventum {
             let ticket_id = *vector::borrow(&winner_ticket_ids, i);
             let percent = *vector::borrow(&event.prize_distribution, i);
             
-            // Calcul du montant
             let prize_amount = (total_pool * percent) / 100;
 
             if (prize_amount > 0) {
-                // On enregistre que ce ticket a droit à ce montant
                 if (table::contains(&event.pending_prizes, ticket_id)) {
                     let current = table::remove(&mut event.pending_prizes, ticket_id);
                     table::add(&mut event.pending_prizes, ticket_id, current + prize_amount);
@@ -251,7 +279,6 @@ module eventum::eventum {
                 };
             };
             
-            // Enregistrer le rang
             let rank = i + 1;
             if (!table::contains(&event.winner_ranks, ticket_id)) {
                 table::add(&mut event.winner_ranks, ticket_id, rank);
@@ -289,27 +316,22 @@ module eventum::eventum {
         };
     }
 
-    // --- FONCTION PRINCIPALE : UPGRADE + CLAIM FUNDS ---
     public entry fun claim_certification(
-        event: &mut Event, // Mutable car on modifie pending_prizes et balance
+        event: &mut Event, 
         kiosk: &mut Kiosk,
         kiosk_cap: &KioskOwnerCap,
-        // Policy retirée car pas de lock soulbound
         ticket_id: ID,
         ctx: &mut TxContext
     ) {
-        // 1. Vérifications
         assert!(event.event_ended, EEventNotEnded);
         
-        // On emprunte le ticket (reste dans le kiosk)
         let ticket_mut = kiosk::borrow_mut<Ticket>(kiosk, kiosk_cap, ticket_id);
         
         assert!(ticket_mut.event_id == object::id(event), EWrongEvent);
         assert!(ticket_mut.status >= 1, ENotCheckedIn);
         assert!(ticket_mut.status == 1, EAlreadyCertified);
 
-        // 2. Mise à jour visuelle (Metadata & Rang)
-        ticket_mut.status = 2; // Certified
+        ticket_mut.status = 2; 
         
         if (event.is_competition && table::contains(&event.winner_ranks, ticket_id)) {
             let rank = *table::borrow(&event.winner_ranks, ticket_id);
@@ -334,41 +356,13 @@ module eventum::eventum {
             ticket_mut.url = string::utf8(b"https://img.icons8.com/color/96/certificate.png");
         };
 
-        // 3. LOGIQUE DE PAIEMENT "CLAIM"
-        // Vérifie si ce ticket a de l'argent qui l'attend
         if (table::contains(&event.pending_prizes, ticket_id)) {
-            // Retirer le montant de la table (sécurité anti-double-dépense)
             let amount = table::remove(&mut event.pending_prizes, ticket_id);
             
             if (amount > 0) {
-                // Prendre l'argent de l'event
                 let prize_coin = coin::split(&mut event.balance, amount, ctx);
-                // Envoyer au propriétaire du Kiosk (celui qui signe la tx)
                 transfer::public_transfer(prize_coin, tx_context::sender(ctx));
             }
-        };
-        
-        // Le NFT est relâché (fin du borrow) avec ses nouvelles métadonnées
-    }
-
-    // --- CONFIGURATION ROYALTIES (À APPELER APRÈS CRÉATION) ---
-    public entry fun configure_royalties(
-        cap: &OrganizerCap,
-        event: &Event,
-        policy: &mut TransferPolicy<Ticket>,
-        policy_cap: &TransferPolicyCap<Ticket>,
-        _ctx: &mut TxContext
-    ) {
-        assert!(object::id(event) == cap.event_id, ENotOrganizer);
-        assert!(event.royalty_percentage <= 100, EInvalidPercentage);
-        
-        if (event.price > 0 && event.royalty_percentage > 0) {
-            custom_royalty_rule::add(
-                policy,
-                policy_cap,
-                event.royalty_percentage * 100,
-                0
-            );
         };
     }
 
@@ -392,16 +386,13 @@ module eventum::custom_royalty_rule {
     use sui::coin::{Self, Coin};
     use sui::sui::SUI;
     
-    /// La structure "témoin" qui identifie cette règle unique
     public struct Rule has drop {}
 
-    /// Configuration de la règle : Pourcentage (bps) et Montant Min
     public struct Config has store, drop {
         amount_bp: u16,
         min_amount: u64,
     }
 
-    /// 1. Fonction pour AJOUTER la règle (celle que tu cherchais)
     public fun add<T>(
         policy: &mut TransferPolicy<T>,
         cap: &TransferPolicyCap<T>,
@@ -416,7 +407,6 @@ module eventum::custom_royalty_rule {
         );
     }
 
-    /// 2. Fonction pour PAYER la règle (sera utilisée par l'acheteur plus tard)
     public fun pay<T>(
         policy: &mut TransferPolicy<T>,
         request: &mut sui::transfer_policy::TransferRequest<T>,
@@ -426,7 +416,6 @@ module eventum::custom_royalty_rule {
         let paid = coin::value(&payment);
         let config: &Config = transfer_policy::get_rule(Rule {}, policy);
         
-        // Calcul du montant dû (logique simplifiée ici)
         let expected = (((transfer_policy::paid(request) as u128) * (config.amount_bp as u128) / 10_000) as u64);
         
         assert!(paid >= expected, 0);

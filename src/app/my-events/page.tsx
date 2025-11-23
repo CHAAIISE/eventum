@@ -14,12 +14,18 @@ import { useCurrentAccount, useSuiClientQuery, useSignAndExecuteTransaction } fr
 import { Transaction } from "@mysten/sui/transactions"
 import { PACKAGE_ID, MODULE_NAME } from "@/lib/contracts"
 
+import { useTicketGenerator } from "@/features/ticket-qr/useTicketGenerator"
+import { Loader2 } from "lucide-react"
+
+
+
 type TabType = "active" | "past"
 
 export default function MyEventsPage() {
   const [activeTab, setActiveTab] = useState<TabType>("active")
   const [showQRModal, setShowQRModal] = useState(false)
   const [qrPayload, setQrPayload] = useState<string | null>(null)
+<<<<<<< HEAD
   
   // Sui Hooks
   const account = useCurrentAccount()
@@ -163,6 +169,25 @@ export default function MyEventsPage() {
   }
 
   const isLoading = isLoadingCap || isLoadingFields || isLoadingTickets
+=======
+  const [generatingTokenId, setGeneratingTokenId] = useState<string | null>(null)
+
+  const { generateTicket } = useTicketGenerator()
+
+  const handleGenerateQR = async (e: React.MouseEvent, tokenId: string) => {
+    e.stopPropagation()
+    setGeneratingTokenId(tokenId)
+    try {
+      const payload = await generateTicket(tokenId)
+      if (payload) {
+        setQrPayload(payload)
+        setShowQRModal(true)
+      }
+    } finally {
+      setGeneratingTokenId(null)
+    }
+  }
+>>>>>>> origin/main
 
   return (
     <div className="min-h-screen pt-32 pb-20 px-4">
@@ -250,6 +275,7 @@ export default function MyEventsPage() {
                     </div>
                   </div>
 
+<<<<<<< HEAD
                   <div className="mt-auto space-y-3">
                     {/* LOGIQUE BOUTONS INTELLIGENTS */}
                     
@@ -269,6 +295,22 @@ export default function MyEventsPage() {
                             Show Entrance QR
                         </Button>
                     )}
+=======
+                  {/* Primary Action: Generate QR */}
+                  <Button
+                    size="sm"
+                    className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white border-0 h-9 shadow-lg shadow-green-900/20"
+                    onClick={(e) => handleGenerateQR(e, event.ticketId)}
+                    disabled={generatingTokenId === event.ticketId}
+                  >
+                    {generatingTokenId === event.ticketId ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <QrCode className="mr-2 h-4 w-4" />
+                    )}
+                    {generatingTokenId === event.ticketId ? "Signing..." : "Show Entrance QR"}
+                  </Button>
+>>>>>>> origin/main
 
                     {/* CAS 2: Ticket scanné (Status 1) -> Claim Reward */}
                     {event!.status === 1 && (
@@ -354,7 +396,7 @@ export default function MyEventsPage() {
           </div>
         )}
 
-        {/* QR Scanner Modal */}
+        {/* QR generator Modal */}
         <Dialog
           open={showQRModal}
           onOpenChange={(open) => {
@@ -380,14 +422,38 @@ export default function MyEventsPage() {
 
               {/* Large QR Code Display */}
               <div className="mx-auto w-96 h-96 bg-white rounded-2xl p-8 flex items-center justify-center shadow-2xl">
-                <div className="w-full h-full bg-black rounded-lg flex flex-col items-center justify-center p-4">
+                <div className="w-full h-full bg-white rounded-lg flex flex-col items-center justify-center p-4">
                   {qrPayload ? (
                     <>
+<<<<<<< HEAD
                       <img
                         src={`https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=${qrPayload}`}
                         alt="Event QR Code"
                         className="h-64 w-64 bg-white/5 rounded-md"
                       />
+=======
+                      <div className="h-64 w-64 bg-gray-200 flex items-center justify-center p-4 border-2 border-gray-400">
+                        <div className="text-center">
+                          <div className="text-6xl mb-2">📱</div>
+                          <div className="text-sm font-mono font-bold text-gray-800">PLACEHOLDER</div>
+                          <div className="text-xs text-gray-600 mt-1">QR CODE</div>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          onClick={async () => {
+                            try {
+                              if (qrPayload) await navigator.clipboard.writeText(qrPayload)
+                            } catch (e) {
+                              console.error("copy failed", e)
+                            }
+                          }}
+                        >
+                          Copy Payload
+                        </Button>
+                      </div>
+>>>>>>> origin/main
                     </>
                   ) : (
                     <div className="text-sm text-muted-foreground">No QR payload yet.</div>
@@ -408,6 +474,6 @@ export default function MyEventsPage() {
         </Dialog>
 
       </div>
-    </div>
+    </div >
   )
 }
