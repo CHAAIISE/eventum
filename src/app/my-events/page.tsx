@@ -24,7 +24,7 @@ export default function MyEventsPage() {
   const [activeTab, setActiveTab] = useState<TabType>("active")
   const [showQRModal, setShowQRModal] = useState(false)
   const [qrPayload, setQrPayload] = useState<string | null>(null)
-  
+
   // Sui Hooks
   const account = useCurrentAccount()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
@@ -54,9 +54,9 @@ export default function MyEventsPage() {
   )
 
   // On récupère les IDs réels des objets (le nom du dynamic field dans un Kiosk = ID de l'objet)
-    const realTicketIds: string[] = (kioskFields?.data ?? [])
-      .map((f: any) => String(f?.name?.value ?? ""))
-      .filter((id: string) => id.length > 0)
+  const realTicketIds: string[] = (kioskFields?.data ?? [])
+    .map((f: any) => String(f?.name?.value ?? ""))
+    .filter((id: string) => id.length > 0)
 
   // --- 3. RECUPERATION DES TICKETS COMPLETS ---
   const { data: ticketsData, isPending: isLoadingTickets, refetch: refetchTickets } = useSuiClientQuery(
@@ -76,21 +76,21 @@ export default function MyEventsPage() {
 
   // --- FILTRAGE DES TICKETS (Active vs Past) ---
   const tickets = ticketsData?.map((obj) => {
-      const fields = (obj.data?.content as any)?.fields
-      if (!fields) return null
-      // On vérifie si c'est bien un ticket de notre module (pour éviter d'afficher d'autres NFTs du Kiosk)
-      if (!obj.data?.type?.includes(MODULE_NAME)) return null 
+    const fields = (obj.data?.content as any)?.fields
+    if (!fields) return null
+    // On vérifie si c'est bien un ticket de notre module (pour éviter d'afficher d'autres NFTs du Kiosk)
+    if (!obj.data?.type?.includes(MODULE_NAME)) return null
 
-      return {
-          id: obj.data?.objectId, // ID unique de l'objet
-          eventId: fields.event_id,
-          title: fields.title,
-          description: fields.description,
-          status: fields.status, // 0=Minted, 1=CheckedIn, 2=Certified
-          rank: fields.rank, // 1=Gold, 2=Silver, 3=Bronze
-          url: fields.url, // L'image dynamique
-          ticketIdDisplay: obj.data?.objectId.slice(0, 6).toUpperCase()
-      }
+    return {
+      id: obj.data?.objectId, // ID unique de l'objet
+      eventId: fields.event_id,
+      title: fields.title,
+      description: fields.description,
+      status: fields.status, // 0=Minted, 1=CheckedIn, 2=Certified
+      rank: fields.rank, // 1=Gold, 2=Silver, 3=Bronze
+      url: fields.url, // L'image dynamique
+      ticketIdDisplay: obj.data?.objectId.slice(0, 6).toUpperCase()
+    }
   }).filter(t => t !== null) || []
 
   // Active = Status 0 (To Check-in) OU Status 1 (To Claim)
@@ -104,25 +104,25 @@ export default function MyEventsPage() {
     setIsProcessing(true)
     const tx = new Transaction()
     tx.moveCall({
-        target: `${PACKAGE_ID}::${MODULE_NAME}::self_checkin`,
-        arguments: [
-            tx.object(ticket.eventId),
-            tx.object(kioskId),
-            tx.object(kioskCapId!),
-            tx.pure.id(ticket.id)
-        ]
+      target: `${PACKAGE_ID}::${MODULE_NAME}::self_checkin`,
+      arguments: [
+        tx.object(ticket.eventId),
+        tx.object(kioskId),
+        tx.object(kioskCapId!),
+        tx.pure.id(ticket.id)
+      ]
     })
 
     signAndExecute({ transaction: tx }, {
-        onSuccess: () => {
-            toast({ title: "Check-in Confirmed!", description: "You are marked as present." })
-            refreshData()
-            setIsProcessing(false)
-        },
-        onError: (err) => {
-            toast({ title: "Error", description: err.message, variant: "destructive" })
-            setIsProcessing(false)
-        }
+      onSuccess: () => {
+        toast({ title: "Check-in Confirmed!", description: "You are marked as present." })
+        refreshData()
+        setIsProcessing(false)
+      },
+      onError: (err) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" })
+        setIsProcessing(false)
+      }
     })
   }
 
@@ -130,26 +130,26 @@ export default function MyEventsPage() {
     setIsProcessing(true)
     const tx = new Transaction()
     tx.moveCall({
-        target: `${PACKAGE_ID}::${MODULE_NAME}::claim_certification`,
-        arguments: [
-            tx.object(ticket.eventId),
-            tx.object(kioskId),
-            tx.object(kioskCapId!),
-            tx.pure.id(ticket.id)
-        ]
+      target: `${PACKAGE_ID}::${MODULE_NAME}::claim_certification`,
+      arguments: [
+        tx.object(ticket.eventId),
+        tx.object(kioskId),
+        tx.object(kioskCapId!),
+        tx.pure.id(ticket.id)
+      ]
     })
 
     signAndExecute({ transaction: tx }, {
-        onSuccess: () => {
-            toast({ title: "Rewards Claimed!", description: "Your NFT has evolved!" })
-            refreshData()
-            setIsProcessing(false)
-        },
-        onError: (err) => {
-            console.error(err)
-            toast({ title: "Wait for Event End", description: "The organizer hasn't ended the event yet.", variant: "destructive" })
-            setIsProcessing(false)
-        }
+      onSuccess: () => {
+        toast({ title: "Rewards Claimed!", description: "Your NFT has evolved!" })
+        refreshData()
+        setIsProcessing(false)
+      },
+      onError: (err) => {
+        console.error(err)
+        toast({ title: "Wait for Event End", description: "The organizer hasn't ended the event yet.", variant: "destructive" })
+        setIsProcessing(false)
+      }
     })
   }
 
@@ -158,11 +158,11 @@ export default function MyEventsPage() {
 
   if (!account) {
     return (
-        <div className="min-h-screen pt-40 flex flex-col items-center justify-center">
-            <Wallet className="h-16 w-16 text-muted-foreground mb-4 opacity-50" />
-            <h2 className="text-2xl font-bold text-white mb-2">Wallet Not Connected</h2>
-            <p className="text-muted-foreground">Please connect your Sui wallet to view your tickets.</p>
-        </div>
+      <div className="min-h-screen pt-40 flex flex-col items-center justify-center">
+        <Wallet className="h-16 w-16 text-muted-foreground mb-4 opacity-50" />
+        <h2 className="text-2xl font-bold text-white mb-2">Wallet Not Connected</h2>
+        <p className="text-muted-foreground">Please connect your Sui wallet to view your tickets.</p>
+      </div>
     )
   }
 
@@ -173,16 +173,16 @@ export default function MyEventsPage() {
     <div className="min-h-screen pt-32 pb-20 px-4">
       <div className="container mx-auto max-w-6xl">
         <div className="mb-8 flex justify-between items-end">
-            <div>
-                <h1 className="text-4xl font-bold mb-3 bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
-                    My Events
-                </h1>
-                <p className="text-muted-foreground text-lg">Your event tickets and proof-of-attendance badges</p>
-            </div>
-            <Button variant="outline" onClick={refreshData} disabled={isLoading} className="border-white/10 hover:bg-white/5">
-                <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-                Refresh
-            </Button>
+          <div>
+            <h1 className="text-4xl font-bold mb-3 bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
+              My Events
+            </h1>
+            <p className="text-muted-foreground text-lg">Your event tickets and proof-of-attendance badges</p>
+          </div>
+          <Button variant="outline" onClick={refreshData} disabled={isLoading} className="border-white/10 hover:bg-white/5">
+            <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+            Refresh
+          </Button>
         </div>
 
         {/* Tabs */}
@@ -211,33 +211,33 @@ export default function MyEventsPage() {
         {activeTab === "active" && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {activeEvents.length === 0 && !isLoading && (
-                <div className="col-span-full text-center py-12 border border-dashed border-white/10 rounded-xl">
-                    <p className="text-muted-foreground">No active tickets found.</p>
-                    <Link href="/"><Button variant="link" className="text-cyan-400">Explore Events</Button></Link>
-                </div>
+              <div className="col-span-full text-center py-12 border border-dashed border-white/10 rounded-xl">
+                <p className="text-muted-foreground">No active tickets found.</p>
+                <Link href="/"><Button variant="link" className="text-cyan-400">Explore Events</Button></Link>
+              </div>
             )}
-            
+
             {activeEvents.map((event) => (
               <GlassCard key={event!.id} className="overflow-hidden group flex flex-col h-full">
                 {/* Ticket Visual */}
                 <div className="relative h-56 bg-gradient-to-br from-cyan-600/20 to-blue-600/20 border-b border-white/10 flex items-center justify-center overflow-hidden">
                   <div className="absolute inset-0 bg-[url('/grid-pattern.svg')] opacity-10" />
-                  
+
                   {/* Affichage Image Dynamique (Priorité à l'image du NFT, sinon icône) */}
                   {event!.url.startsWith('http') ? (
-                      <img src={event!.url} alt="Ticket" className="h-32 w-32 object-contain z-10 drop-shadow-lg" />
+                    <img src={event!.url} alt="Ticket" className="h-32 w-32 object-contain z-10 drop-shadow-lg" />
                   ) : (
                     <div className="relative z-10 text-center">
-                        <div className="h-16 w-16 mx-auto mb-3 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg">
+                      <div className="h-16 w-16 mx-auto mb-3 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg">
                         <Calendar className="h-8 w-8 text-white" />
-                        </div>
-                        <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30">#{event!.ticketIdDisplay}</Badge>
+                      </div>
+                      <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30">#{event!.ticketIdDisplay}</Badge>
                     </div>
                   )}
 
                   <div className="absolute top-3 right-3">
                     <Badge className={event!.status === 1 ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-green-500/20 text-green-400 border-green-500/30"}>
-                        {event!.status === 1 ? "Checked-In" : "Active"}
+                      {event!.status === 1 ? "Checked-In" : "Active"}
                     </Badge>
                   </div>
                 </div>
@@ -258,41 +258,41 @@ export default function MyEventsPage() {
 
                   <div className="mt-auto space-y-3">
                     {/* LOGIQUE BOUTONS INTELLIGENTS */}
-                    
+
                     {/* CAS 1: Ticket non scanné (Status 0) -> Afficher QR */}
                     {event!.status === 0 && (
-                        <Button
-                            size="sm"
-                            className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white border-0 h-9 shadow-lg shadow-green-900/20"
-                            onClick={(e) => {
-                            e.stopPropagation()
-                            // L'ID REEL DU TICKET POUR LE SCANNER
-                            setQrPayload(event!.id)
-                            setShowQRModal(true)
-                            }}
-                        >
-                            <QrCode className="mr-2 h-4 w-4" />
-                            Show Entrance QR
-                        </Button>
+                      <Button
+                        size="sm"
+                        className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white border-0 h-9 shadow-lg shadow-green-900/20"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          // L'ID REEL DU TICKET POUR LE SCANNER
+                          setQrPayload(event!.id)
+                          setShowQRModal(true)
+                        }}
+                      >
+                        <QrCode className="mr-2 h-4 w-4" />
+                        Show Entrance QR
+                      </Button>
                     )}
 
                     {/* CAS 2: Ticket scanné (Status 1) -> Claim Reward */}
                     {event!.status === 1 && (
-                         <Button
-                            size="sm"
-                            disabled={isProcessing}
-                            className="w-full bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white border-0 h-9"
-                            onClick={() => handleClaim(event)}
-                        >
-                            {isProcessing ? <Loader2 className="animate-spin mr-2 h-4 w-4"/> : <Trophy className="mr-2 h-4 w-4" />}
-                            Claim & Reveal NFT
-                        </Button>
+                      <Button
+                        size="sm"
+                        disabled={isProcessing}
+                        className="w-full bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white border-0 h-9"
+                        onClick={() => handleClaim(event)}
+                      >
+                        {isProcessing ? <Loader2 className="animate-spin mr-2 h-4 w-4" /> : <Trophy className="mr-2 h-4 w-4" />}
+                        Claim & Reveal NFT
+                      </Button>
                     )}
 
                     {/* Secondary Action: Trade */}
                     <button className="w-full text-sm text-cyan-400 hover:text-cyan-300 transition-colors flex items-center justify-center gap-2 py-2">
-                        Trade on TradePort
-                        <ExternalLink className="h-4 w-4" />
+                      Trade on TradePort
+                      <ExternalLink className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
@@ -304,10 +304,10 @@ export default function MyEventsPage() {
         {/* Past Events / POAPs */}
         {activeTab === "past" && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-             {pastEvents.length === 0 && (
-                <div className="col-span-full text-center py-12 border border-dashed border-white/10 rounded-xl">
-                    <p className="text-muted-foreground">No past events yet.</p>
-                </div>
+            {pastEvents.length === 0 && (
+              <div className="col-span-full text-center py-12 border border-dashed border-white/10 rounded-xl">
+                <p className="text-muted-foreground">No past events yet.</p>
+              </div>
             )}
 
             {pastEvents.map((event) => (
@@ -316,17 +316,17 @@ export default function MyEventsPage() {
                 <div className="relative h-56 bg-gradient-to-br from-slate-600/20 to-slate-800/20 border-b border-white/10 flex items-center justify-center overflow-hidden">
                   <div className="absolute inset-0 bg-[url('/grid-pattern.svg')] opacity-5" />
                   <div className="relative z-10 text-center">
-                    
+
                     {/* Affichage de l'image du NFT (Médaille/Badge) */}
                     {event!.url.startsWith('http') ? (
-                         <img src={event!.url} alt="Medal" className="h-32 w-32 object-contain drop-shadow-2xl animate-in zoom-in duration-500" />
+                      <img src={event!.url} alt="Medal" className="h-32 w-32 object-contain drop-shadow-2xl animate-in zoom-in duration-500" />
                     ) : (
-                        // Fallback si image cassée
-                        <div className={`h-24 w-24 mx-auto mb-3 rounded-full flex items-center justify-center shadow-2xl bg-gradient-to-br from-slate-500 to-slate-700`}>
-                            <Award className="h-12 w-12 text-white" />
-                        </div>
+                      // Fallback si image cassée
+                      <div className={`h-24 w-24 mx-auto mb-3 rounded-full flex items-center justify-center shadow-2xl bg-gradient-to-br from-slate-500 to-slate-700`}>
+                        <Award className="h-12 w-12 text-white" />
+                      </div>
                     )}
-                   
+
                     <Badge
                       className={`mt-3 ${event!.rank === 1 // Gold
                         ? "bg-amber-500/20 text-amber-300 border-amber-500/30"
@@ -349,7 +349,7 @@ export default function MyEventsPage() {
                 <div className="p-5 flex-1 flex flex-col">
                   <h3 className="text-lg font-bold text-white mb-2">{event!.title}</h3>
                   <p className="text-sm text-muted-foreground mb-4">{event!.description}</p>
-                  
+
                   <div className="mt-auto pt-4 border-t border-white/5 flex items-center gap-2 text-sm">
                     <CheckCircle2 className="h-4 w-4 text-green-400" />
                     <span className="text-green-400 font-medium">Verified On-Chain</span>
