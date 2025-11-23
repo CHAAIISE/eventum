@@ -1,27 +1,26 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import Link from "next/link"
 import { GlassCard } from "@/components/ui/glass-card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Camera, ExternalLink, Calendar, MapPin, CheckCircle2, Trophy, Medal, Award, QrCode, X, Loader2, Wallet, RefreshCw } from "lucide-react"
+import { Camera, ExternalLink, Calendar, MapPin, CheckCircle2, Trophy, Medal, Award, QrCode, X, Loader2, Wallet, RefreshCw, Ticket as TicketIcon } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { useToast } from "@/hooks/use-toast"
 
 // --- SUI IMPORTS ---
-import { useCurrentAccount, useSuiClientQuery, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
+import { useCurrentAccount, useSignAndExecuteTransaction } from "@mysten/dapp-kit"
 import { Transaction } from "@mysten/sui/transactions"
 import { PACKAGE_ID, MODULE_NAME } from "@/lib/contracts"
 
 import { useTicketGenerator } from "@/features/ticket-qr/useTicketGenerator"
+import { useMyTicketsAndEvents } from "./useMyTickets"
 
-
-
-type TabType = "active" | "past"
+type TabType = "upcoming" | "active" | "past"
 
 export default function MyEventsPage() {
-  const [activeTab, setActiveTab] = useState<TabType>("active")
+  const [activeTab, setActiveTab] = useState<TabType>("upcoming")
   const [showQRModal, setShowQRModal] = useState(false)
   const [qrPayload, setQrPayload] = useState<string | null>(null)
   
@@ -31,76 +30,78 @@ export default function MyEventsPage() {
   const { toast } = useToast()
   const [isProcessing, setIsProcessing] = useState(false)
 
-  // --- 1. RECUPERATION DU KIOSK ---
-  const { data: kioskCapData, isPending: isLoadingCap, refetch: refetchCap } = useSuiClientQuery(
-    "getOwnedObjects",
-    {
-      owner: account?.address || "",
-      filter: { StructType: "0x2::kiosk::KioskOwnerCap" },
-      options: { showContent: true },
-    },
-    { enabled: !!account }
+  // Utiliser le hook personnalisé
+  const { data, isLoading, refetch: refreshData } = useMyTicketsAndEvents()
+  const rawTickets = data?.tickets || []
+  const eventsData = data?.events || []
+  const kioskId = data?.kioskId
+  const kioskCapId = data?.kioskCapId
+
+  console.log('🎫 [MyEvents] Raw tickets from hook:', rawTickets.length);
+  console.log('🎫 [MyEvents] Events from hook:', eventsData.length);
+  console.log('🎫 [MyEvents] Kiosk ID:', kioskId);
+  console.log('🎫 [MyEvents] First raw ticket:', rawTickets[0]);
+  console.log('🎫 [MyEvents] First event:', eventsData[0]);
+
+  // Mapper les événements pour savoir si le check-in est activé
+  const eventsMap = new Map(
+    eventsData?.map((obj: any) => [
+      obj?.objectId,
+      (obj?.content as any)?.fields?.checkin_enabled || false
+    ]) || []
   )
 
-  const kioskCap = kioskCapData?.data?.[0]
-  const kioskId = (kioskCap?.data?.content as any)?.fields?.for
-  const kioskCapId = kioskCap?.data?.objectId
+  // Transformer les tickets en format utilisable
+  const tickets = rawTickets.map((ticket: any) => {
+    const fields = (ticket?.content as any)?.fields;
+    if (!fields) {
+      console.log('⚠️ [MyEvents] Ticket without fields:', ticket);
+      return null;
+    }
 
-  // --- 2. RECUPERATION DES ITEMS DU KIOSK ---
-  const { data: kioskFields, isPending: isLoadingFields, refetch: refetchFields } = useSuiClientQuery(
-    "getDynamicFields",
-    { parentId: kioskId || "" },
-    { enabled: !!kioskId }
-  )
+    const checkinEnabled = eventsMap.get(fields.event_id) || false
+    
+    // Vérifier si l'événement existe
+    const eventExists = eventsData.some((e: any) => e?.objectId === fields.event_id);
+    if (!eventExists) {
+      console.warn('⚠️ [MyEvents] Event not found for ticket:', fields.event_id);
+    }
 
-  // On récupère les IDs réels des objets (le nom du dynamic field dans un Kiosk = ID de l'objet)
-    const realTicketIds: string[] = (kioskFields?.data ?? [])
-      .map((f: any) => String(f?.name?.value ?? ""))
-      .filter((id: string) => id.length > 0)
+    return {
+      id: ticket.objectId,
+      eventId: fields.event_id,
+      title: fields.title || 'Unknown Event',
+      description: fields.description || 'Event information unavailable',
+      status: fields.status,
+      rank: fields.rank,
+      url: fields.url || "https://via.placeholder.com/200x200?text=Ticket",
+      ticketIdDisplay: ticket.objectId.slice(0, 6).toUpperCase(),
+      checkinEnabled: checkinEnabled,
+      eventExists: eventExists
+    }
+  }).filter((t: any) => t !== null)
 
-  // --- 3. RECUPERATION DES TICKETS COMPLETS ---
-  const { data: ticketsData, isPending: isLoadingTickets, refetch: refetchTickets } = useSuiClientQuery(
-    "multiGetObjects",
-    {
-      ids: realTicketIds,
-      options: { showContent: true, showDisplay: true },
-    },
-    { enabled: realTicketIds.length > 0 }
-  )
+  console.log('🎫 [MyEvents] Formatted tickets:', tickets);
+  console.log('🎫 [MyEvents] First formatted ticket:', tickets[0]);
 
-  const refreshData = () => {
-    refetchCap()
-    refetchFields()
-    refetchTickets()
-  }
+  // Upcoming = Status 0 (Minted) ET check-in PAS encore activé
+  const upcomingEvents = tickets.filter((t: any) => t.status === 0 && !t.checkinEnabled)
+  // Active = (Status 0 ET check-in activé) OU Status 1 (CheckedIn)
+  const activeEvents = tickets.filter((t: any) => (t.status === 0 && t.checkinEnabled) || t.status === 1)
+  // Past = Status 2 (Certified)
+  const pastEvents = tickets.filter((t: any) => t.status === 2)
 
-  // --- FILTRAGE DES TICKETS (Active vs Past) ---
-  const tickets = ticketsData?.map((obj) => {
-      const fields = (obj.data?.content as any)?.fields
-      if (!fields) return null
-      // On vérifie si c'est bien un ticket de notre module (pour éviter d'afficher d'autres NFTs du Kiosk)
-      if (!obj.data?.type?.includes(MODULE_NAME)) return null 
-
-      return {
-          id: obj.data?.objectId, // ID unique de l'objet
-          eventId: fields.event_id,
-          title: fields.title,
-          description: fields.description,
-          status: fields.status, // 0=Minted, 1=CheckedIn, 2=Certified
-          rank: fields.rank, // 1=Gold, 2=Silver, 3=Bronze
-          url: fields.url, // L'image dynamique
-          ticketIdDisplay: obj.data?.objectId.slice(0, 6).toUpperCase()
-      }
-  }).filter(t => t !== null) || []
-
-  // Active = Status 0 (To Check-in) OU Status 1 (To Claim)
-  const activeEvents = tickets.filter(t => t!.status === 0 || t!.status === 1)
-  // Past = Status 2 (Finished/Certified)
-  const pastEvents = tickets.filter(t => t!.status === 2)
+  console.log('🎫 [MyEvents] upcomingEvents:', upcomingEvents.length);
+  console.log('🎫 [MyEvents] activeEvents:', activeEvents.length);
+  console.log('🎫 [MyEvents] pastEvents:', pastEvents.length);
 
   // --- ACTIONS BLOCKCHAIN ---
-
   const handleCheckIn = (ticket: any) => {
+    if (!kioskId || !kioskCapId) {
+      toast({ title: "Error", description: "Kiosk not found", variant: "destructive" })
+      return
+    }
+
     setIsProcessing(true)
     const tx = new Transaction()
     tx.moveCall({
@@ -108,7 +109,7 @@ export default function MyEventsPage() {
         arguments: [
             tx.object(ticket.eventId),
             tx.object(kioskId),
-            tx.object(kioskCapId!),
+            tx.object(kioskCapId),
             tx.pure.id(ticket.id)
         ]
     })
@@ -127,6 +128,11 @@ export default function MyEventsPage() {
   }
 
   const handleClaim = (ticket: any) => {
+    if (!kioskId || !kioskCapId) {
+      toast({ title: "Error", description: "Kiosk not found", variant: "destructive" })
+      return
+    }
+
     setIsProcessing(true)
     const tx = new Transaction()
     tx.moveCall({
@@ -134,7 +140,7 @@ export default function MyEventsPage() {
         arguments: [
             tx.object(ticket.eventId),
             tx.object(kioskId),
-            tx.object(kioskCapId!),
+            tx.object(kioskCapId),
             tx.pure.id(ticket.id)
         ]
     })
@@ -153,9 +159,7 @@ export default function MyEventsPage() {
     })
   }
 
-
   // --- RENDERING ---
-
   if (!account) {
     return (
         <div className="min-h-screen pt-40 flex flex-col items-center justify-center">
@@ -166,255 +170,217 @@ export default function MyEventsPage() {
     )
   }
 
-  const isLoading = isLoadingCap || isLoadingFields || isLoadingTickets
+  // Vérifier si l'utilisateur a un Kiosk
+  if (!isLoading && !kioskId) {
+    return (
+        <div className="min-h-screen pt-40 flex flex-col items-center justify-center max-w-md mx-auto text-center px-4">
+            <TicketIcon className="h-16 w-16 text-muted-foreground mb-4 opacity-50" />
+            <h2 className="text-2xl font-bold text-white mb-2">No Kiosk Found</h2>
+            <p className="text-muted-foreground mb-4">
+                You don&apos;t have a Kiosk yet. A Kiosk will be automatically created when you purchase your first ticket.
+            </p>
+            <p className="text-sm text-muted-foreground/70">
+                Browse events and buy a ticket to get started!
+            </p>
+        </div>
+    )
+  }
 
+  if (isLoading) {
+    return (
+        <div className="min-h-screen pt-40 flex items-center justify-center">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+    )
+  }
 
   return (
-    <div className="min-h-screen pt-32 pb-20 px-4">
-      <div className="container mx-auto max-w-6xl">
-        <div className="mb-8 flex justify-between items-end">
-            <div>
-                <h1 className="text-4xl font-bold mb-3 bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
-                    My Events
-                </h1>
-                <p className="text-muted-foreground text-lg">Your event tickets and proof-of-attendance badges</p>
-            </div>
-            <Button variant="outline" onClick={refreshData} disabled={isLoading} className="border-white/10 hover:bg-white/5">
-                <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-                Refresh
-            </Button>
+    <div className="min-h-screen pt-32 pb-20 px-6">
+      <div className="max-w-5xl mx-auto">
+        <div className="flex items-center justify-between mb-8">
+          <h1 className="text-4xl font-bold">My Tickets</h1>
+          <Button onClick={() => refreshData()} variant="outline" size="sm">
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
         </div>
 
-        {/* Tabs */}
-        <div className="flex items-center gap-2 mb-10 p-1 bg-white/5 rounded-lg w-fit border border-white/10">
-          <button
+        {/* TABS */}
+        <div className="flex gap-2 mb-8">
+          <Button
+            onClick={() => setActiveTab("upcoming")}
+            variant={activeTab === "upcoming" ? "default" : "outline"}
+            className="flex-1"
+          >
+            Upcoming ({upcomingEvents.length})
+          </Button>
+          <Button
             onClick={() => setActiveTab("active")}
-            className={`px-8 py-3 rounded-md text-sm font-medium transition-all ${activeTab === "active"
-              ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/30"
-              : "text-muted-foreground hover:text-white hover:bg-white/5"
-              }`}
+            variant={activeTab === "active" ? "default" : "outline"}
+            className="flex-1"
           >
             Active ({activeEvents.length})
-          </button>
-          <button
+          </Button>
+          <Button
             onClick={() => setActiveTab("past")}
-            className={`px-8 py-3 rounded-md text-sm font-medium transition-all ${activeTab === "past"
-              ? "bg-cyan-600 text-white shadow-lg shadow-cyan-900/30"
-              : "text-muted-foreground hover:text-white hover:bg-white/5"
-              }`}
+            variant={activeTab === "past" ? "default" : "outline"}
+            className="flex-1"
           >
-            Past / POAPs ({pastEvents.length})
-          </button>
+            Past/POAPs ({pastEvents.length})
+          </Button>
         </div>
 
-        {/* Active Events */}
-        {activeTab === "active" && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {activeEvents.length === 0 && !isLoading && (
-                <div className="col-span-full text-center py-12 border border-dashed border-white/10 rounded-xl">
-                    <p className="text-muted-foreground">No active tickets found.</p>
-                    <Link href="/"><Button variant="link" className="text-cyan-400">Explore Events</Button></Link>
-                </div>
-            )}
-            
-            {activeEvents.map((event) => (
-              <GlassCard key={event!.id} className="overflow-hidden group flex flex-col h-full">
-                {/* Ticket Visual */}
-                <div className="relative h-56 bg-gradient-to-br from-cyan-600/20 to-blue-600/20 border-b border-white/10 flex items-center justify-center overflow-hidden">
-                  <div className="absolute inset-0 bg-[url('/grid-pattern.svg')] opacity-10" />
-                  
-                  {/* Affichage Image Dynamique (Priorité à l'image du NFT, sinon icône) */}
-                  {event!.url.startsWith('http') ? (
-                      <img src={event!.url} alt="Ticket" className="h-32 w-32 object-contain z-10 drop-shadow-lg" />
-                  ) : (
-                    <div className="relative z-10 text-center">
-                        <div className="h-16 w-16 mx-auto mb-3 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg">
-                        <Calendar className="h-8 w-8 text-white" />
-                        </div>
-                        <Badge className="bg-cyan-500/20 text-cyan-300 border-cyan-500/30">#{event!.ticketIdDisplay}</Badge>
-                    </div>
-                  )}
-
-                  <div className="absolute top-3 right-3">
-                    <Badge className={event!.status === 1 ? "bg-amber-500/20 text-amber-400 border-amber-500/30" : "bg-green-500/20 text-green-400 border-green-500/30"}>
-                        {event!.status === 1 ? "Checked-In" : "Active"}
-                    </Badge>
-                  </div>
-                </div>
-
-                {/* Event Details */}
-                <div className="p-5 space-y-4 flex-1 flex flex-col">
-                  <div>
-                    <h3 className="text-lg font-bold text-white mb-2">{event!.title}</h3>
-                    <div className="space-y-1 text-sm text-muted-foreground">
-                      <div className="flex items-center gap-2">
-                        <MapPin className="h-4 w-4 text-cyan-400" />
-                        <span>Sui Network</span>
-                      </div>
-                      <p className="text-xs pt-2 line-clamp-2">{event!.description}</p>
-                    </div>
-                  </div>
-
-
-                  <div className="mt-auto space-y-3">
-                    {/* LOGIQUE BOUTONS INTELLIGENTS */}
-                    
-                    {/* CAS 1: Ticket non scanné (Status 0) -> Afficher QR */}
-                    {event!.status === 0 && (
-                        <Button
-                            size="sm"
-                            className="w-full bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white border-0 h-9 shadow-lg shadow-green-900/20"
-                            onClick={(e) => {
-                            e.stopPropagation()
-                            // L'ID REEL DU TICKET POUR LE SCANNER
-                            setQrPayload(event!.id)
-                            setShowQRModal(true)
-                            }}
-                        >
-                            <QrCode className="mr-2 h-4 w-4" />
-                            Show Entrance QR
-                        </Button>
-                    )}
-
-                    {/* CAS 2: Ticket scanné (Status 1) -> Claim Reward */}
-                    {event!.status === 1 && (
-                         <Button
-                            size="sm"
-                            disabled={isProcessing}
-                            className="w-full bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white border-0 h-9"
-                            onClick={() => handleClaim(event)}
-                        >
-                            {isProcessing ? <Loader2 className="animate-spin mr-2 h-4 w-4"/> : <Trophy className="mr-2 h-4 w-4" />}
-                            Claim & Reveal NFT
-                        </Button>
-                    )}
-
-                    {/* Secondary Action: Trade */}
-                    <button className="w-full text-sm text-cyan-400 hover:text-cyan-300 transition-colors flex items-center justify-center gap-2 py-2">
-                        Trade on TradePort
-                        <ExternalLink className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              </GlassCard>
-            ))}
-          </div>
-        )}
-
-        {/* Past Events / POAPs */}
-        {activeTab === "past" && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-             {pastEvents.length === 0 && (
-                <div className="col-span-full text-center py-12 border border-dashed border-white/10 rounded-xl">
-                    <p className="text-muted-foreground">No past events yet.</p>
-                </div>
-            )}
-
-            {pastEvents.map((event) => (
-              <GlassCard key={event!.id} className="overflow-hidden h-full flex flex-col">
-                {/* Badge Visual */}
-                <div className="relative h-56 bg-gradient-to-br from-slate-600/20 to-slate-800/20 border-b border-white/10 flex items-center justify-center overflow-hidden">
-                  <div className="absolute inset-0 bg-[url('/grid-pattern.svg')] opacity-5" />
-                  <div className="relative z-10 text-center">
-                    
-                    {/* Affichage de l'image du NFT (Médaille/Badge) */}
-                    {event!.url.startsWith('http') ? (
-                         <img src={event!.url} alt="Medal" className="h-32 w-32 object-contain drop-shadow-2xl animate-in zoom-in duration-500" />
-                    ) : (
-                        // Fallback si image cassée
-                        <div className={`h-24 w-24 mx-auto mb-3 rounded-full flex items-center justify-center shadow-2xl bg-gradient-to-br from-slate-500 to-slate-700`}>
-                            <Award className="h-12 w-12 text-white" />
-                        </div>
-                    )}
-                   
-                    <Badge
-                      className={`mt-3 ${event!.rank === 1 // Gold
-                        ? "bg-amber-500/20 text-amber-300 border-amber-500/30"
-                        : event!.rank === 2 // Silver
-                          ? "bg-gray-400/20 text-gray-300 border-gray-500/30"
-                          : event!.rank === 3 // Bronze
-                            ? "bg-orange-500/20 text-orange-300 border-orange-500/30"
-                            : "bg-white/20 text-white border-white/30"
-                        }`}
-                    >
-                      {event!.rank === 1 ? "Gold Winner" : event!.rank === 2 ? "Silver Winner" : event!.rank === 3 ? "Bronze Winner" : "Finisher"}
-                    </Badge>
-                  </div>
-                  <div className="absolute top-3 right-3">
-                    <CheckCircle2 className="h-6 w-6 text-green-400" />
-                  </div>
-                </div>
-
-                {/* Event Details */}
-                <div className="p-5 flex-1 flex flex-col">
-                  <h3 className="text-lg font-bold text-white mb-2">{event!.title}</h3>
-                  <p className="text-sm text-muted-foreground mb-4">{event!.description}</p>
-                  
-                  <div className="mt-auto pt-4 border-t border-white/5 flex items-center gap-2 text-sm">
-                    <CheckCircle2 className="h-4 w-4 text-green-400" />
-                    <span className="text-green-400 font-medium">Verified On-Chain</span>
-                  </div>
-                </div>
-              </GlassCard>
-            ))}
-          </div>
-        )}
-
-        {/* QR generator Modal */}
-        <Dialog
-          open={showQRModal}
-          onOpenChange={(open) => {
-            setShowQRModal(open)
-            if (!open) setQrPayload(null)
-          }}
-        >
-          <DialogContent className="max-w-2xl bg-[#03132b] border-white/10 p-12">
-            <button
-              onClick={() => {
-                setShowQRModal(false)
-                setQrPayload(null)
-              }}
-              className="absolute top-4 right-4 text-muted-foreground hover:text-white transition-colors"
-            >
-              <X className="h-6 w-6" />
-            </button>
-            <div className="text-center space-y-6">
-              <DialogHeader>
-                <DialogTitle className="text-3xl font-bold text-white mb-2">Entrance QR Code</DialogTitle>
-                <DialogDescription className="text-muted-foreground">Attendees scan this code at the entrance to check in</DialogDescription>
-              </DialogHeader>
-
-              {/* Large QR Code Display */}
-              <div className="mx-auto w-96 h-96 bg-white rounded-2xl p-8 flex items-center justify-center shadow-2xl">
-                <div className="w-full h-full bg-white rounded-lg flex flex-col items-center justify-center p-4">
-                  {qrPayload ? (
-                    <>
-
-                      <img
-                        src={`https://api.qrserver.com/v1/create-qr-code/?size=512x512&data=${qrPayload}`}
-                        alt="Event QR Code"
-                        className="h-64 w-64 bg-white/5 rounded-md"
+        {/* UPCOMING SECTION */}
+        {activeTab === "upcoming" && (
+          <div className="space-y-6">
+            {upcomingEvents.length === 0 ? (
+              <p className="text-center text-muted-foreground py-12">No upcoming events</p>
+            ) : (
+              upcomingEvents.map((ticket: any) => (
+                <GlassCard key={ticket.id} className="p-6">
+                  <div className="flex items-start gap-6">
+                    {/* Image du NFT */}
+                    <div className="relative">
+                      <img 
+                        src={ticket.url} 
+                        alt={ticket.title} 
+                        className="w-48 h-48 object-cover rounded-lg border-2 border-primary/20" 
                       />
-                    </>
-                  ) : (
-                    <div className="text-sm text-muted-foreground">No QR payload yet.</div>
-                  )}
-                </div>
-              </div>
+                      <Badge className="absolute top-2 left-2">#{ticket.ticketIdDisplay}</Badge>
+                    </div>
+                    
+                    {/* Infos du ticket */}
+                    <div className="flex-1">
+                      <h3 className="text-2xl font-bold mb-2">{ticket.title}</h3>
+                      <p className="text-muted-foreground mb-4">{ticket.description}</p>
+                      
+                      <div className="flex gap-2 mb-4 flex-wrap">
+                        <Badge variant="outline">Status: Minted</Badge>
+                        <Badge variant="outline">Event ID: {ticket.eventId?.slice(0, 8)}...</Badge>
+                        {!ticket.eventExists && (
+                          <Badge variant="destructive">⚠️ Event Not Found (Old Package)</Badge>
+                        )}
+                      </div>
 
-              <div className="space-y-2 w-full text-center">
-                <p className="text-xs text-muted-foreground mt-2 font-mono">
-                  ID: {qrPayload}
-                </p>
-                <p className="text-xs text-cyan-400">
-                  Show this to the organizer to validate your attendance.
-                </p>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+                      {/* Bouton QR Code */}
+                      <Button 
+                        onClick={() => {
+                          setQrPayload(`${ticket.id}|${ticket.eventId}`);
+                          setShowQRModal(true);
+                        }}
+                        variant="outline"
+                        className="w-full"
+                        disabled={!ticket.eventExists}
+                      >
+                        <QrCode className="h-4 w-4 mr-2" />
+                        {ticket.eventExists ? 'Generate QR Code for Check-in' : 'QR Code Unavailable (Buy New Ticket)'}
+                      </Button>
+                      
+                      {!ticket.eventExists && (
+                        <p className="text-xs text-muted-foreground mt-2">
+                          This ticket is from an old contract version. Please purchase a new ticket from the current events.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </GlassCard>
+              ))
+            )}
+          </div>
+        )}
 
+        {/* ACTIVE SECTION */}
+        {activeTab === "active" && (
+          <div className="space-y-6">
+            {activeEvents.length === 0 ? (
+              <p className="text-center text-muted-foreground py-12">No active events</p>
+            ) : (
+              activeEvents.map((event: any) => (
+                <GlassCard key={event.id} className="p-6">
+                  <div className="flex items-start gap-6">
+                    <img src={event.url} alt={event.title} className="w-32 h-32 object-cover rounded-lg" />
+                    <div className="flex-1">
+                      <h3 className="text-2xl font-bold mb-2">{event.title}</h3>
+                      <p className="text-muted-foreground mb-4">{event.description}</p>
+                      <Badge>Ticket #{event.ticketIdDisplay}</Badge>
+                      {event.status === 0 && (
+                        <Button onClick={() => handleCheckIn(event)} className="mt-4" disabled={isProcessing}>
+                          <CheckCircle2 className="h-4 w-4 mr-2" />
+                          Check In
+                        </Button>
+                      )}
+                      {event.status === 1 && (
+                        <div className="flex items-center gap-4 mt-4">
+                          <Badge variant="secondary">✓ Checked In</Badge>
+                          <Button onClick={() => handleClaim(event)} disabled={isProcessing}>
+                            <Trophy className="h-4 w-4 mr-2" />
+                            Claim Rewards
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </GlassCard>
+              ))
+            )}
+          </div>
+        )}
+
+        {/* PAST SECTION */}
+        {activeTab === "past" && (
+          <div className="space-y-6">
+            {pastEvents.length === 0 ? (
+              <p className="text-center text-muted-foreground py-12">No past events</p>
+            ) : (
+              pastEvents.map((event: any) => (
+                <GlassCard key={event.id} className="p-6">
+                  <div className="flex items-start gap-6">
+                    <img src={event.url} alt={event.title} className="w-32 h-32 object-cover rounded-lg" />
+                    <div className="flex-1">
+                      <h3 className="text-2xl font-bold mb-2">{event.title}</h3>
+                      <p className="text-muted-foreground mb-4">{event.description}</p>
+                      <div className="flex items-center gap-2">
+                        <Badge>Ticket #{event.ticketIdDisplay}</Badge>
+                        {event.rank === 1 && <Badge variant="secondary"><Trophy className="h-3 w-3 mr-1" />Gold</Badge>}
+                        {event.rank === 2 && <Badge variant="secondary"><Medal className="h-3 w-3 mr-1" />Silver</Badge>}
+                        {event.rank === 3 && <Badge variant="secondary"><Award className="h-3 w-3 mr-1" />Bronze</Badge>}
+                      </div>
+                    </div>
+                  </div>
+                </GlassCard>
+              ))
+            )}
+          </div>
+        )}
       </div>
-    </div >
+
+      {/* QR CODE MODAL */}
+      <Dialog open={showQRModal} onOpenChange={setShowQRModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Your Ticket QR Code</DialogTitle>
+            <DialogDescription>
+              Show this QR code at the event entrance for check-in
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center gap-4 py-4">
+            {qrPayload && (
+              <>
+                <div className="bg-white p-4 rounded-lg">
+                  <img 
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrPayload)}`}
+                    alt="Ticket QR Code"
+                    className="w-48 h-48"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground text-center">
+                  QR Code contains your ticket ID and event information
+                </p>
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
   )
 }

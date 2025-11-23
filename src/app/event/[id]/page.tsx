@@ -12,12 +12,15 @@ export default function EventPage({ params }: { params: Promise<{ id: string }> 
   // Déballage des params (Nécessaire en Client Component Next.js récents)
   const { id } = use(params)
 
-  // 1. Fetcher les données on-chain de l'Event
+  // 1. Fetcher les données on-chain de l'Event avec polling automatique
   const { data: objectData, isPending, error } = useSuiClientQuery(
     "getObject",
     {
       id: id,
       options: { showContent: true },
+    },
+    {
+      refetchInterval: 2000, // Poll toutes les 2 secondes pour détecter les changements
     }
   )
 

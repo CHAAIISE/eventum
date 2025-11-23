@@ -14,6 +14,9 @@ importers:
       '@mysten/enoki':
         specifier: ^0.12.12
         version: 0.12.12(@types/react@19.2.6)(react@19.2.0)(typescript@5.9.3)
+      '@mysten/kiosk':
+        specifier: ^0.14.4
+        version: 0.14.4(typescript@5.9.3)
       '@mysten/sui':
         specifier: ^1.45.0
         version: 1.45.0(typescript@5.9.3)
@@ -550,6 +553,10 @@ packages:
         optional: true
       react:
         optional: true
+
+  '@mysten/kiosk@0.14.4':
+    resolution: {integrity: sha512-gXYUWxAMPviMrtbQLyW6PUPVSRk6vmbHy7G0d9z8tZW6D6Ak0NOuxOXGh3GHrG3vweG6SWxdvamzqseT2y5J8w==}
+    engines: {node: '>=18'}
 
   '@mysten/ledgerjs-hw-app-sui@0.7.0':
     resolution: {integrity: sha512-Z2ydxg35U2tk3pThsWzPewticDnHWqAeLlh2Vp4NhYU/YFyoVxK9obh21pnvU/hmRzL+BRpYlwbX5Nuo77+lwA==}
@@ -3779,6 +3786,15 @@ snapshots:
       - debug
       - encoding
       - supports-color
+      - typescript
+
+  '@mysten/kiosk@0.14.4(typescript@5.9.3)':
+    dependencies:
+      '@mysten/sui': 1.45.0(typescript@5.9.3)
+      '@mysten/utils': 0.2.0
+    transitivePeerDependencies:
+      - '@gql.tada/svelte-support'
+      - '@gql.tada/vue-support'
       - typescript
 
   '@mysten/ledgerjs-hw-app-sui@0.7.0':

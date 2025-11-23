@@ -53,6 +53,11 @@ export default function ManagePage() {
   const { events: myEventsData, isLoading: isLoadingMyEvents } = useMyEvents()
   const [isProcessing, setIsProcessing] = useState(false)
 
+  console.log('🔧 [ManagePage] currentAccount:', currentAccount);
+  console.log('🔧 [ManagePage] currentAccount.address:', currentAccount?.address);
+  console.log('🔧 [ManagePage] myEventsData:', myEventsData);
+  console.log('🔧 [ManagePage] isLoadingMyEvents:', isLoadingMyEvents);
+
   // --- FORM STATES ---
   const [eventType, setEventType] = useState<"standard" | "competition">("standard")
   const [isPaid, setIsPaid] = useState(false)
@@ -77,7 +82,7 @@ export default function ManagePage() {
 
   // --- DASHBOARD STATE ---
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<"Active" | "Upcoming" | "Finished">("Active")
+  const [activeTab, setActiveTab] = useState<"Active" | "Upcoming" | "Finished">("Upcoming")
   
   // Modals State
   const [showQRModal, setShowQRModal] = useState(false)
@@ -128,8 +133,14 @@ export default function ManagePage() {
     }
   }).filter(e => e !== null) || []
 
+  console.log('🔧 [ManagePage] myEvents:', myEvents);
+  console.log('🔧 [ManagePage] myEvents statuses:', myEvents.map(e => ({ title: e?.title, status: e?.status })));
+  console.log('🔧 [ManagePage] activeTab:', activeTab);
+
   const currentEvent = myEvents.find((e) => e?.id === selectedEventId)
   const filteredEvents = myEvents.filter((e) => e?.status === activeTab)
+
+  console.log('🔧 [ManagePage] filteredEvents:', filteredEvents);
 
 
   // --- ACTIONS SUI ---
@@ -439,6 +450,30 @@ export default function ManagePage() {
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
               {/* LEFT: List of Events */}
               <div className="lg:col-span-4 space-y-4">
+                {/* Onglets de filtrage */}
+                <div className="flex gap-2 mb-4">
+                  <Button 
+                    onClick={() => setActiveTab("Upcoming")}
+                    variant={activeTab === "Upcoming" ? "default" : "outline"}
+                    className={activeTab === "Upcoming" ? "bg-cyan-600" : ""}
+                  >
+                    Upcoming
+                  </Button>
+                  <Button 
+                    onClick={() => setActiveTab("Active")}
+                    variant={activeTab === "Active" ? "default" : "outline"}
+                    className={activeTab === "Active" ? "bg-green-600" : ""}
+                  >
+                    Active
+                  </Button>
+                  <Button 
+                    onClick={() => setActiveTab("Finished")}
+                    variant={activeTab === "Finished" ? "default" : "outline"}
+                    className={activeTab === "Finished" ? "bg-gray-600" : ""}
+                  >
+                    Finished
+                  </Button>
+                </div>
                 <h2 className="text-xl font-bold text-white mb-4">Your Events</h2>
                 {isLoadingMyEvents ? (
                      <div className="flex justify-center py-10"><Loader2 className="animate-spin text-cyan-400"/></div>

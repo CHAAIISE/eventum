@@ -4,10 +4,12 @@
 import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Ticket, Loader2 } from "lucide-react"
-import { useSignAndExecuteTransaction, useCurrentAccount, useSuiClientQuery } from "@mysten/dapp-kit"
+import { useSignAndExecuteTransaction, useCurrentAccount, useSuiClientQuery, useSuiClient } from "@mysten/dapp-kit"
 import { Transaction } from "@mysten/sui/transactions"
 import { useToast } from "@/hooks/use-toast"
 import { PACKAGE_ID, MODULE_NAME } from "@/lib/contracts"
+import { useQueryClient, useQuery } from "@tanstack/react-query"
+import { KioskClient, Network } from '@mysten/kiosk'
 
 interface BuyButtonProps {
   eventId: string
@@ -17,9 +19,12 @@ interface BuyButtonProps {
 
 export function BuyTicketButton({ eventId, price, onSuccess }: BuyButtonProps) {
   const account = useCurrentAccount()
+  const client = useSuiClient()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
   const { toast } = useToast()
   const [isBuying, setIsBuying] = useState(false)
+  const [justBought, setJustBought] = useState(false)
+  const queryClient = useQueryClient()
 
   // 1. Vérifier si l'utilisateur possède déjà un Kiosk (via KioskOwnerCap)
   const { data: kioskData, isLoading: isLoadingKiosk } = useSuiClientQuery(
@@ -31,6 +36,54 @@ export function BuyTicketButton({ eventId, price, onSuccess }: BuyButtonProps) {
     },
     { enabled: !!account }
   )
+
+  // 2. Vérifier si l'utilisateur a déjà un ticket pour cet event dans son Kiosk
+  const { data: hasTicket } = useQuery({
+    queryKey: ['has-ticket', account?.address, eventId],
+    enabled: !!account && !!eventId,
+    refetchInterval: 2000,
+    queryFn: async () => {
+      if (!account) return false
+
+      const kioskClient = new KioskClient({
+        client,
+        network: Network.TESTNET,
+      })
+
+      const { kioskOwnerCaps } = await kioskClient.getOwnedKiosks({
+        address: account.address,
+      })
+
+      if (kioskOwnerCaps.length === 0) return false
+
+      const kioskId = kioskOwnerCaps[0].kioskId
+
+      const res = await kioskClient.getKiosk({
+        id: kioskId,
+        options: { withObjects: true },
+      })
+
+      const myTickets = res.items.filter((item) => 
+        item.type.includes('::eventum::Ticket')
+      )
+
+      if (myTickets.length === 0) return false
+
+      const ticketIds = myTickets.map(t => t.objectId)
+      const ticketsWithFields = await client.multiGetObjects({
+        ids: ticketIds,
+        options: { showContent: true },
+      })
+
+      // Vérifier si un ticket correspond à cet event
+      return ticketsWithFields.some((ticketObj) => {
+        const fields = (ticketObj.data?.content as any)?.fields
+        return fields?.event_id === eventId
+      })
+    }
+  })
+
+  const hasAlreadyBought = hasTicket || justBought
 
   const handleBuy = async () => {
     if (!account) return toast({ title: "Connect Wallet", variant: "destructive" })
@@ -84,14 +137,45 @@ export function BuyTicketButton({ eventId, price, onSuccess }: BuyButtonProps) {
       signAndExecute(
         { transaction: tx },
         {
-          onSuccess: (res) => {
-            toast({ title: "Ticket Minted!", description: "Check your dashboard." })
+          onSuccess: async (res) => {
+            console.log('✅ Transaction réussie:', res);
+            
+            // Marquer immédiatement comme acheté
+            setJustBought(true)
             setIsBuying(false)
+            
+            // Afficher le toast
+            toast({ 
+              title: "✅ Ticket Acheté !", 
+              description: "Mise à jour de l'interface...",
+              duration: 3000
+            })
+            
+            // Refetch IMMÉDIATEMENT toutes les queries (pas de délai)
+            await Promise.all([
+              queryClient.refetchQueries({ 
+                queryKey: ['getObject'], 
+                type: 'active' 
+              }),
+              queryClient.refetchQueries({ 
+                queryKey: ['has-ticket', account.address, eventId], 
+              }),
+              queryClient.invalidateQueries({ queryKey: ['my-tickets'] }),
+              queryClient.invalidateQueries({ queryKey: ['getOwnedObjects'] }),
+            ])
+            
+            console.log('✅ UI mise à jour immédiatement');
+            
             if (onSuccess) onSuccess()
           },
           onError: (err) => {
-            console.error(err)
-            toast({ title: "Error", description: err.message, variant: "destructive" })
+            console.error('❌ Erreur transaction:', err)
+            toast({ 
+              title: "❌ Erreur d'achat", 
+              description: err.message, 
+              variant: "destructive",
+              duration: 5000
+            })
             setIsBuying(false)
           }
         }
@@ -104,6 +188,18 @@ export function BuyTicketButton({ eventId, price, onSuccess }: BuyButtonProps) {
   }
 
   if (!account) return <Button disabled>Connect Wallet to Buy</Button>
+  
+  if (hasAlreadyBought) {
+    return (
+      <Button 
+        disabled
+        className="w-full h-12 text-lg bg-green-600 hover:bg-green-600 text-white border-0 shadow-lg font-bold tracking-wide"
+      >
+        <Ticket className="mr-2 h-5 w-5" />
+        NFT Already Minted
+      </Button>
+    )
+  }
   
   return (
     <Button 
