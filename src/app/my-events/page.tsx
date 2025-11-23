@@ -23,7 +23,7 @@ export default function MyEventsPage() {
   const [activeTab, setActiveTab] = useState<TabType>("upcoming")
   const [showQRModal, setShowQRModal] = useState(false)
   const [qrPayload, setQrPayload] = useState<string | null>(null)
-  
+
   // Sui Hooks
   const account = useCurrentAccount()
   const { mutate: signAndExecute } = useSignAndExecuteTransaction()
@@ -67,6 +67,7 @@ export default function MyEventsPage() {
       console.warn('⚠️ [MyEvents] Event not found for ticket:', fields.event_id);
     }
 
+<<<<<<< HEAD
     return {
       id: ticket.objectId,
       eventId: fields.event_id,
@@ -80,6 +81,12 @@ export default function MyEventsPage() {
       eventExists: eventExists
     }
   }).filter((t: any) => t !== null)
+=======
+  // On récupère les IDs réels des objets (le nom du dynamic field dans un Kiosk = ID de l'objet)
+  const realTicketIds: string[] = (kioskFields?.data ?? [])
+    .map((f: any) => String(f?.name?.value ?? ""))
+    .filter((id: string) => id.length > 0)
+>>>>>>> refs/remotes/origin/main
 
   console.log('🎫 [MyEvents] Formatted tickets:', tickets);
   console.log('🎫 [MyEvents] First formatted ticket:', tickets[0]);
@@ -91,9 +98,35 @@ export default function MyEventsPage() {
   // Past = Status 2 (Certified)
   const pastEvents = tickets.filter((t: any) => t.status === 2)
 
+<<<<<<< HEAD
   console.log('🎫 [MyEvents] upcomingEvents:', upcomingEvents.length);
   console.log('🎫 [MyEvents] activeEvents:', activeEvents.length);
   console.log('🎫 [MyEvents] pastEvents:', pastEvents.length);
+=======
+  // --- FILTRAGE DES TICKETS (Active vs Past) ---
+  const tickets = ticketsData?.map((obj) => {
+    const fields = (obj.data?.content as any)?.fields
+    if (!fields) return null
+    // On vérifie si c'est bien un ticket de notre module (pour éviter d'afficher d'autres NFTs du Kiosk)
+    if (!obj.data?.type?.includes(MODULE_NAME)) return null
+
+    return {
+      id: obj.data?.objectId, // ID unique de l'objet
+      eventId: fields.event_id,
+      title: fields.title,
+      description: fields.description,
+      status: fields.status, // 0=Minted, 1=CheckedIn, 2=Certified
+      rank: fields.rank, // 1=Gold, 2=Silver, 3=Bronze
+      url: fields.url, // L'image dynamique
+      ticketIdDisplay: obj.data?.objectId.slice(0, 6).toUpperCase()
+    }
+  }).filter(t => t !== null) || []
+
+  // Active = Status 0 (To Check-in) OU Status 1 (To Claim)
+  const activeEvents = tickets.filter(t => t!.status === 0 || t!.status === 1)
+  // Past = Status 2 (Finished/Certified)
+  const pastEvents = tickets.filter(t => t!.status === 2)
+>>>>>>> refs/remotes/origin/main
 
   // --- ACTIONS BLOCKCHAIN ---
   const handleCheckIn = (ticket: any) => {
@@ -115,15 +148,15 @@ export default function MyEventsPage() {
     })
 
     signAndExecute({ transaction: tx }, {
-        onSuccess: () => {
-            toast({ title: "Check-in Confirmed!", description: "You are marked as present." })
-            refreshData()
-            setIsProcessing(false)
-        },
-        onError: (err) => {
-            toast({ title: "Error", description: err.message, variant: "destructive" })
-            setIsProcessing(false)
-        }
+      onSuccess: () => {
+        toast({ title: "Check-in Confirmed!", description: "You are marked as present." })
+        refreshData()
+        setIsProcessing(false)
+      },
+      onError: (err) => {
+        toast({ title: "Error", description: err.message, variant: "destructive" })
+        setIsProcessing(false)
+      }
     })
   }
 
@@ -136,6 +169,7 @@ export default function MyEventsPage() {
     setIsProcessing(true)
     const tx = new Transaction()
     tx.moveCall({
+
         target: `${PACKAGE_ID}::${MODULE_NAME}::claim_certification`,
         arguments: [
             tx.object(ticket.eventId),
@@ -143,30 +177,31 @@ export default function MyEventsPage() {
             tx.object(kioskCapId),
             tx.pure.id(ticket.id)
         ]
+
     })
 
     signAndExecute({ transaction: tx }, {
-        onSuccess: () => {
-            toast({ title: "Rewards Claimed!", description: "Your NFT has evolved!" })
-            refreshData()
-            setIsProcessing(false)
-        },
-        onError: (err) => {
-            console.error(err)
-            toast({ title: "Wait for Event End", description: "The organizer hasn't ended the event yet.", variant: "destructive" })
-            setIsProcessing(false)
-        }
+      onSuccess: () => {
+        toast({ title: "Rewards Claimed!", description: "Your NFT has evolved!" })
+        refreshData()
+        setIsProcessing(false)
+      },
+      onError: (err) => {
+        console.error(err)
+        toast({ title: "Wait for Event End", description: "The organizer hasn't ended the event yet.", variant: "destructive" })
+        setIsProcessing(false)
+      }
     })
   }
 
   // --- RENDERING ---
   if (!account) {
     return (
-        <div className="min-h-screen pt-40 flex flex-col items-center justify-center">
-            <Wallet className="h-16 w-16 text-muted-foreground mb-4 opacity-50" />
-            <h2 className="text-2xl font-bold text-white mb-2">Wallet Not Connected</h2>
-            <p className="text-muted-foreground">Please connect your Sui wallet to view your tickets.</p>
-        </div>
+      <div className="min-h-screen pt-40 flex flex-col items-center justify-center">
+        <Wallet className="h-16 w-16 text-muted-foreground mb-4 opacity-50" />
+        <h2 className="text-2xl font-bold text-white mb-2">Wallet Not Connected</h2>
+        <p className="text-muted-foreground">Please connect your Sui wallet to view your tickets.</p>
+      </div>
     )
   }
 
@@ -195,12 +230,14 @@ export default function MyEventsPage() {
   }
 
   return (
+
     <div className="min-h-screen pt-32 pb-20 px-6">
       <div className="max-w-5xl mx-auto">
         <div className="flex items-center justify-between mb-8">
           <h1 className="text-4xl font-bold">My Tickets</h1>
           <Button onClick={() => refreshData()} variant="outline" size="sm">
             <RefreshCw className="h-4 w-4 mr-2" />
+
             Refresh
           </Button>
         </div>
@@ -230,6 +267,7 @@ export default function MyEventsPage() {
           </Button>
         </div>
 
+
         {/* UPCOMING SECTION */}
         {activeTab === "upcoming" && (
           <div className="space-y-6">
@@ -245,6 +283,7 @@ export default function MyEventsPage() {
                         src={ticket.url} 
                         alt={ticket.title} 
                         className="w-48 h-48 object-cover rounded-lg border-2 border-primary/20" 
+
                       />
                       <Badge className="absolute top-2 left-2">#{ticket.ticketIdDisplay}</Badge>
                     </div>
