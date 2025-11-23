@@ -9,7 +9,7 @@ module eventum::eventum {
     use std::string::{Self, String};
     use std::vector;
     use sui::kiosk::{Self, Kiosk, KioskOwnerCap};
-    use sui::transfer_policy::{Self, TransferPolicy, TransferPolicyCap}; 
+    use sui::transfer_policy::{Self}; 
     use sui::table::{Self, Table};
     use eventum::custom_royalty_rule;
 
@@ -97,8 +97,7 @@ module eventum::eventum {
 
         display::update_version(&mut display);
         
-        
-        transfer::public_transfer(publisher, tx_context::sender(ctx));
+        transfer::public_share_object(publisher);
         transfer::public_transfer(display, tx_context::sender(ctx));
     }
 
