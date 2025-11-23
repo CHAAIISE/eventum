@@ -205,7 +205,7 @@ export default function ManagePage() {
       tx.moveCall({
         target: `${PACKAGE_ID}::${MODULE_NAME}::create_event`,
         arguments: [
-          tx.object(PUBLISHER_ID), // Arg 1: Publisher (hardcoded)
+          tx.object(PUBLISHER_ID), // Arg 1: Shared Publisher
           tx.pure.string(createTitle),
           tx.pure.string(createDescription || "No description"),
           tx.pure.string(`${createDate} ${createTime}`),

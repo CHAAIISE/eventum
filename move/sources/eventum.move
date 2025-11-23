@@ -12,6 +12,7 @@ module eventum::eventum {
     use sui::transfer_policy::{Self}; 
     use sui::table::{Self, Table};
     use eventum::custom_royalty_rule;
+    use sui::event;
 
     // --- CONSTANTES D'ERREUR ---
     const EWrongAmount: u64 = 0;
@@ -74,6 +75,12 @@ module eventum::eventum {
         status: u8, 
         rank: u64, 
         url: String 
+    }
+
+    public struct EventCreated has copy, drop {
+        event_id: ID,
+        organizer: address,
+        title: String,
     }
 
     fun init(otw: EVENTUM, ctx: &mut TxContext) {
@@ -189,6 +196,12 @@ module eventum::eventum {
 
         transfer::share_object(event);
         transfer::public_transfer(cap, tx_context::sender(ctx));
+
+        event::emit(EventCreated {
+            event_id: event_id,
+            organizer: tx_context::sender(ctx),
+            title: string::utf8(title) // On renvoie le titre pour l'afficher facilement
+        });
     }
 
     public entry fun add_to_whitelist(
